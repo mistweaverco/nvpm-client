@@ -10,17 +10,36 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/spinnerutil"
 	"github.com/mistweaverco/zana-client/internal/lib/treesitterdeps"
 )
 
-// PreflightTreeSitterInjectionQueryPackages installs ambiguous Tree-sitter-queries registry packages
-// referenced by treesitter.build[].injections (per Neovim integration) before the main install proceeds.
+// PreflightTreeSitterInjectionQueryPackages resolves Neovim injection host languages declared on
+// treesitter.build[].injections: builds a parser requires graph for each host grammar, prompts when
+// grammars are missing, and installs Tree-sitter-parser packages in topological order.
 func PreflightTreeSitterInjectionQueryPackages(registryItem registry_parser.RegistryItem, resolvedVersion string) error {
-	return ensureNeovimTreeSitterInjectionQueryPackages(registryItem, resolvedVersion)
+	return resolveNeovimTreeSitterInjectionDependencies(registryItem, resolvedVersion, func() {
+		neovimInjectionContinueAnywaySourceID = registryItem.Source.ID
+	})
 }
 
 func ensureNeovimTreeSitterInjectionQueryPackages(registryItem registry_parser.RegistryItem, resolvedVersion string) error {
+	if registryItem.Source.ID != "" &&
+		neovimInjectionContinueAnywaySourceID == registryItem.Source.ID {
+		neovimInjectionContinueAnywaySourceID = ""
+		return nil
+	}
+	return resolveNeovimTreeSitterInjectionDependencies(registryItem, resolvedVersion, nil)
+}
+
+// neovimInjectionContinueAnywaySourceID is set when the user chooses "Continue anyway" during
+// injection preflight so buildAndMaybeIntegrateTreeSitter does not prompt a second time.
+var neovimInjectionContinueAnywaySourceID string
+
+func resolveNeovimTreeSitterInjectionDependencies(
+	registryItem registry_parser.RegistryItem,
+	resolvedVersion string,
+	onContinueAnyway func(),
+) error {
 	if registryItem.Source.ID == "" || registryItem.TreeSitter == nil {
 		return nil
 	}
@@ -30,61 +49,61 @@ func ensureNeovimTreeSitterInjectionQueryPackages(registryItem registry_parser.R
 	if !integrationEnabled("neovim") {
 		return nil
 	}
-	reg := registry_parser.NewDefaultRegistryParser()
 	langs := treesitterdeps.MergeInjectionLanguagesForEditor(registryItem, "neovim")
 	if len(langs) == 0 {
 		return nil
 	}
-	for _, lang := range langs {
-		lang = strings.ToLower(strings.TrimSpace(lang))
-		if lang == "" {
-			continue
+	reg := registry_parser.NewDefaultRegistryParser()
+	resolve := func(lang string) (string, error) {
+		id, err := resolveParserSourceIDForLanguage(lang, reg, registryItem.Source.ID, resolvedVersion)
+		if err != nil && strings.Contains(err.Error(), "no Tree-sitter-parser registry package") {
+			return "", nil
 		}
-		cands := treesitterdeps.QueryPackageCandidates(reg, lang, "neovim")
-		if len(cands) == 0 {
-			continue
+		return id, err
+	}
+	edges, injectionLangs, err := treesitterdeps.BuildInjectionParserRequireEdges(registryItem, reg, "neovim", resolve)
+	if err != nil {
+		return err
+	}
+	order, err := treesitterdeps.TopoInstallOrder(injectionLangs, edges)
+	if err != nil {
+		return err
+	}
+	missing := missingNeovimParserLanguages(reg, order)
+	if len(missing) == 0 {
+		if registryItem.Source.ID == neovimInjectionContinueAnywaySourceID {
+			neovimInjectionContinueAnywaySourceID = ""
 		}
-		sourceID, err := resolveQueryPackageSourceIDForLanguage(lang, "neovim", reg, registryItem.Source.ID, resolvedVersion)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(sourceID) == "" {
-			continue
-		}
-		if local_packages_parser.IsPackageInstalled(sourceID) {
-			continue
-		}
-		ver := strings.TrimSpace(reg.GetLatestVersion(sourceID))
-		if ver == "" {
-			ver = "latest"
-		}
-		title := fmt.Sprintf("Installing Neovim query package %s@%s (%s)...", sourceID, ver, lang)
-		var installFailed bool
-		action := func() {
-			if !Install(sourceID, ver) {
-				installFailed = true
-			}
-		}
-		if err := spinnerutil.RunWithTTYOrPlain(title, func() {
-			if NeovimInheritInstallNotifierStart != nil {
-				NeovimInheritInstallNotifierStart(sourceID, ver)
-			}
-		}, action); err != nil {
-			return err
-		}
-		if installFailed {
-			return fmt.Errorf("failed to install Tree-sitter-queries package %s for injection language %q", sourceID, lang)
-		}
-		noteTreeSitterDependencyInstallSuccess()
-		if NeovimInheritInstallNotifierDone != nil {
-			instVer := strings.TrimSpace(local_packages_parser.GetBySourceId(sourceID).Version)
-			if instVer == "" {
-				instVer = ver
-			}
-			NeovimInheritInstallNotifierDone(sourceID, instVer)
+		return nil
+	}
+	var hint strings.Builder
+	for _, l := range missing {
+		if ids := registrySourceIDsForTreeSitterLanguage(l, reg); len(ids) > 0 {
+			fmt.Fprintf(&hint, "\n• %s — e.g. zana install %s --integrate neovim", l, ids[0])
+		} else {
+			fmt.Fprintf(&hint, "\n• %s — install a Tree-sitter-parser package that lists this language in the registry", l)
 		}
 	}
-	return nil
+	title := fmt.Sprintf("Missing tree-sitter grammar(s) for Neovim injections: %s", strings.Join(missing, ", "))
+	desc := "Injected regions in this grammar need these host parsers installed via Zana (Tree-sitter-parser packages whose languages include the names above)." + hint.String()
+	action, err := neovimInheritsPrompt(title, desc)
+	if err != nil {
+		return err
+	}
+	switch action {
+	case neovimInheritsAbort:
+		return fmt.Errorf("aborted: install injection host grammar(s) first%s", hint.String())
+	case neovimInheritsContinue:
+		if onContinueAnyway != nil {
+			onContinueAnyway()
+		}
+		return nil
+	case neovimInheritsInstall:
+		neovimInjectionContinueAnywaySourceID = ""
+		return installRegistryTreeSitterPackagesInLanguageOrder(registryItem.Source.ID, missing, reg, hint.String())
+	default:
+		return fmt.Errorf("aborted: install injection host grammar(s) first%s", hint.String())
+	}
 }
 
 func resolveQueryPackageSourceIDForLanguage(

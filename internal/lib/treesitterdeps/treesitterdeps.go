@@ -49,6 +49,27 @@ type RegistryIndex interface {
 	GetData(force bool) registry_parser.RegistryRoot
 }
 
+// LanguageNeedsNeovimParser reports whether any registry parser package builds a native grammar
+// artifact (non queries_only with grammar_dir) for lang.
+func LanguageNeedsNeovimParser(reg RegistryIndex, lang string) bool {
+	want := normLang(lang)
+	if want == "" {
+		return false
+	}
+	for _, id := range ParserCandidates(reg, want) {
+		item := reg.GetBySourceId(id)
+		if item.TreeSitter == nil {
+			continue
+		}
+		for _, b := range item.TreeSitter.Build {
+			if normLang(b.Language) == want && !b.QueriesOnly && strings.TrimSpace(b.GrammarDir) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ParserCandidates returns registry source ids for packages that provide a parser build row
 // for the given tree-sitter language (Tree-sitter-parser category only).
 func ParserCandidates(reg RegistryIndex, lang string) []string {
@@ -345,6 +366,64 @@ func CollectQueryInheritEdges(root registry_parser.RegistryItem, editor string) 
 		}
 	}
 	return edges
+}
+
+func mergeParserRequireEdges(dst, src map[string][]string) {
+	for dep, dependents := range src {
+		list := dst[dep]
+		for _, d := range dependents {
+			d = normLang(d)
+			if d == "" {
+				continue
+			}
+			dup := false
+			for _, x := range list {
+				if x == d {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				list = append(list, d)
+			}
+		}
+		dst[dep] = list
+	}
+}
+
+// BuildInjectionParserRequireEdges merges parser-layer requires edges from each injection host
+// language's registry package (treesitter.build[].requires on those grammars).
+func BuildInjectionParserRequireEdges(
+	root registry_parser.RegistryItem,
+	reg RegistryIndex,
+	editor string,
+	resolveLang func(requiredLang string) (sourceID string, err error),
+) (edges map[string][]string, injectionLangs []string, err error) {
+	injectionLangs = MergeInjectionLanguagesForEditor(root, editor)
+	edges = map[string][]string{}
+	if len(injectionLangs) == 0 {
+		return edges, nil, nil
+	}
+	for _, lang := range injectionLangs {
+		sourceID, err := resolveLang(lang)
+		if err != nil {
+			return nil, nil, err
+		}
+		sourceID = strings.TrimSpace(sourceID)
+		if sourceID == "" {
+			continue
+		}
+		depItem := reg.GetBySourceId(sourceID)
+		if depItem.Source.ID == "" {
+			continue
+		}
+		sub, err := BuildParserRequireEdges(depItem, reg, resolveLang)
+		if err != nil {
+			return nil, nil, err
+		}
+		mergeParserRequireEdges(edges, sub)
+	}
+	return edges, injectionLangs, nil
 }
 
 // MergeInjectionLanguages returns a deduplicated list of injection host languages declared on build rows.

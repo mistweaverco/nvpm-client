@@ -514,6 +514,65 @@ func installNeovimParsersAndQueriesFromCache(sourceID, version string, languages
 	return nil
 }
 
+// installedNeovimParserGrammarLanguages returns language names that have a parser shared library
+// installed under Neovim's site/parser directory.
+func installedNeovimParserGrammarLanguages() map[string]struct{} {
+	out := map[string]struct{}{}
+	if !integrationEnabled("neovim") {
+		return out
+	}
+	dataDir, err := detectNeovimDataPath()
+	if err != nil {
+		return out
+	}
+	destDir := filepath.Join(dataDir, "site", "parser")
+	entries, err := os.ReadDir(destDir)
+	if err != nil {
+		return out
+	}
+	ext := SharedLibExt()
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ext) {
+			continue
+		}
+		lang := strings.ToLower(strings.TrimSuffix(name, ext))
+		if lang != "" {
+			out[lang] = struct{}{}
+		}
+	}
+	return out
+}
+
+func parserLanguagesAvailableForNeovim(reg *registry_parser.RegistryParser, langs []string) map[string]struct{} {
+	have := installedNeovimParserGrammarLanguages()
+	if len(have) == 0 {
+		have = installedParserGrammarLanguages(reg)
+	}
+	return have
+}
+
+func missingNeovimParserLanguages(reg *registry_parser.RegistryParser, langs []string) []string {
+	have := parserLanguagesAvailableForNeovim(reg, langs)
+	var missing []string
+	for _, l := range langs {
+		l = strings.ToLower(strings.TrimSpace(l))
+		if l == "" {
+			continue
+		}
+		if !treesitterdeps.LanguageNeedsNeovimParser(reg, l) {
+			continue
+		}
+		if _, ok := have[l]; !ok {
+			missing = append(missing, l)
+		}
+	}
+	return missing
+}
+
 func installedTreeSitterGrammarLanguages(reg *registry_parser.RegistryParser) map[string]struct{} {
 	out := map[string]struct{}{}
 	for _, pkg := range local_packages_parser.GetData(false).Packages {
@@ -541,45 +600,60 @@ func registrySourceIDsForTreeSitterLanguage(lang string, reg *registry_parser.Re
 	return treesitterdeps.ParserCandidates(reg, lang)
 }
 
+func sortedLanguageKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func installRegistryTreeSitterPackagesForLanguages(
 	consumerSourceID string,
 	missing []string,
 	reg *registry_parser.RegistryParser,
 	hint string,
 ) error {
-	seenID := map[string]struct{}{}
-	var ids []string
+	return installRegistryTreeSitterPackagesInLanguageOrder(consumerSourceID, missing, reg, hint)
+}
+
+// installRegistryTreeSitterPackagesInLanguageOrder installs parser packages for languages in the
+// given order (e.g. topological order from a requires graph). Duplicate source ids are skipped.
+func installRegistryTreeSitterPackagesInLanguageOrder(
+	consumerSourceID string,
+	langsInOrder []string,
+	reg *registry_parser.RegistryParser,
+	hint string,
+) error {
 	var noRegistry []string
-	for _, l := range missing {
-		id, err := resolveParserSourceIDForLanguage(l, reg, consumerSourceID, "")
+	seenInstall := map[string]struct{}{}
+	for _, lang := range langsInOrder {
+		lang = strings.ToLower(strings.TrimSpace(lang))
+		if lang == "" || !treesitterdeps.LanguageNeedsNeovimParser(reg, lang) {
+			continue
+		}
+		have := parserLanguagesAvailableForNeovim(reg, langsInOrder)
+		if _, ok := have[lang]; ok {
+			continue
+		}
+		id, err := resolveParserSourceIDForLanguage(lang, reg, consumerSourceID, "")
 		if err != nil {
 			return err
 		}
 		if id == "" {
-			noRegistry = append(noRegistry, l)
+			noRegistry = append(noRegistry, lang)
 			continue
 		}
-		if _, dup := seenID[id]; dup {
+		if _, dup := seenInstall[id]; dup {
 			continue
 		}
-		seenID[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	if len(ids) == 0 {
-		return fmt.Errorf(
-			"no registry Tree-sitter-parser packages found for languages: %s%s",
-			strings.Join(noRegistry, ", "),
-			hint,
-		)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
 		ver := strings.TrimSpace(reg.GetLatestVersion(id))
 		dispVer := ver
 		if dispVer == "" {
 			dispVer = "latest"
 		}
-		title := fmt.Sprintf("Installing inherited tree-sitter grammar %s@%s...", id, dispVer)
+		title := fmt.Sprintf("Installing tree-sitter grammar %s@%s (%s)...", id, dispVer, lang)
 
 		var installFailed bool
 		action := func() {
@@ -597,7 +671,13 @@ func installRegistryTreeSitterPackagesForLanguages(
 		}
 
 		if installFailed {
-			return fmt.Errorf("failed to install inherited grammar %s", id)
+			return fmt.Errorf("failed to install tree-sitter grammar %s for language %q", id, lang)
+		}
+		item := reg.GetBySourceId(id)
+		if item.Source.ID != "" {
+			if err := ensureTreeSitterParserRequirements(item, ver); err != nil {
+				return err
+			}
 		}
 		noteTreeSitterDependencyInstallSuccess()
 		instVer := strings.TrimSpace(local_packages_parser.GetBySourceId(id).Version)
@@ -607,14 +687,16 @@ func installRegistryTreeSitterPackagesForLanguages(
 		if NeovimInheritInstallNotifierDone != nil {
 			NeovimInheritInstallNotifierDone(id, instVer)
 		}
+		seenInstall[id] = struct{}{}
 	}
-	have := installedParserGrammarLanguages(reg)
-	var still []string
-	for _, l := range missing {
-		if _, ok := have[strings.ToLower(strings.TrimSpace(l))]; !ok {
-			still = append(still, l)
-		}
+	if len(seenInstall) == 0 && len(noRegistry) > 0 {
+		return fmt.Errorf(
+			"no registry Tree-sitter-parser packages found for languages: %s%s",
+			strings.Join(noRegistry, ", "),
+			hint,
+		)
 	}
+	still := missingNeovimParserLanguages(reg, langsInOrder)
 	if len(still) > 0 {
 		msg := fmt.Sprintf(
 			"after installing dependencies, still missing tree-sitter grammar(s): %s",
@@ -692,13 +774,8 @@ func resolveNeovimTreeSitterInheritDependencies(
 		return nil
 	}
 	reg := registry_parser.NewDefaultRegistryParser()
-	have := installedParserGrammarLanguages(reg)
-	var missing []string
-	for l := range need {
-		if _, ok := have[l]; !ok {
-			missing = append(missing, l)
-		}
-	}
+	needList := sortedLanguageKeys(need)
+	missing := missingNeovimParserLanguages(reg, needList)
 	if len(missing) == 0 {
 		if registryItem.Source.ID == neovimInheritContinueAnywaySourceID {
 			neovimInheritContinueAnywaySourceID = ""

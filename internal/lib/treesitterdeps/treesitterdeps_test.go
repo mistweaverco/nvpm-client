@@ -105,6 +105,80 @@ func TestQueryPackageCandidates(t *testing.T) {
 	require.Len(t, got, 2)
 }
 
+func TestLanguageNeedsNeovimParser(t *testing.T) {
+	js := registry_parser.RegistryItem{
+		Source:     registry_parser.RegistryItemSource{ID: "github:demo/js"},
+		Categories: []string{"Tree-sitter-parser"},
+		TreeSitter: &registry_parser.RegistryItemTreeSitter{
+			Build: []registry_parser.RegistryItemTreeSitterBuild{
+				{Language: "ecma", QueriesOnly: true, Integrations: []string{"neovim"}},
+				{Language: "javascript", GrammarDir: ".", Integrations: []string{"neovim"}},
+			},
+		},
+	}
+	reg := stubReg{items: []registry_parser.RegistryItem{js}}
+	require.True(t, LanguageNeedsNeovimParser(reg, "javascript"))
+	require.False(t, LanguageNeedsNeovimParser(reg, "ecma"))
+}
+
+func TestBuildInjectionParserRequireEdges(t *testing.T) {
+	root := registry_parser.RegistryItem{
+		TreeSitter: &registry_parser.RegistryItemTreeSitter{
+			Build: []registry_parser.RegistryItemTreeSitterBuild{
+				{
+					Language:     "svelte",
+					Integrations: []string{"neovim"},
+					Injections:   []string{"css", "javascript"},
+				},
+			},
+		},
+	}
+	css := registry_parser.RegistryItem{
+		Source:     registry_parser.RegistryItemSource{ID: "github:demo/css"},
+		Categories: []string{"Tree-sitter-parser"},
+		TreeSitter: &registry_parser.RegistryItemTreeSitter{
+			Build: []registry_parser.RegistryItemTreeSitterBuild{
+				{Language: "css", GrammarDir: ".", Integrations: []string{"neovim"}},
+			},
+		},
+	}
+	js := registry_parser.RegistryItem{
+		Source:     registry_parser.RegistryItemSource{ID: "github:demo/js"},
+		Categories: []string{"Tree-sitter-parser"},
+		TreeSitter: &registry_parser.RegistryItemTreeSitter{
+			Build: []registry_parser.RegistryItemTreeSitterBuild{
+				{Language: "javascript", GrammarDir: ".", Integrations: []string{"neovim"}, Requires: []string{"ecma"}},
+			},
+		},
+	}
+	ecma := registry_parser.RegistryItem{
+		Source:     registry_parser.RegistryItemSource{ID: "github:demo/ecma"},
+		Categories: []string{"Tree-sitter-parser"},
+		TreeSitter: &registry_parser.RegistryItemTreeSitter{
+			Build: []registry_parser.RegistryItemTreeSitterBuild{
+				{Language: "ecma", GrammarDir: ".", Integrations: []string{"neovim"}},
+			},
+		},
+	}
+	reg := stubReg{items: []registry_parser.RegistryItem{root, css, js, ecma}}
+	resolve := func(lang string) (string, error) {
+		switch lang {
+		case "css":
+			return "github:demo/css", nil
+		case "javascript":
+			return "github:demo/js", nil
+		case "ecma":
+			return "github:demo/ecma", nil
+		default:
+			return "", nil
+		}
+	}
+	edges, langs, err := BuildInjectionParserRequireEdges(root, reg, "neovim", resolve)
+	require.NoError(t, err)
+	require.Equal(t, []string{"css", "javascript"}, langs)
+	require.Contains(t, edges["ecma"], "javascript")
+}
+
 func TestMergeInjectionLanguagesForEditor(t *testing.T) {
 	root := registry_parser.RegistryItem{
 		TreeSitter: &registry_parser.RegistryItemTreeSitter{

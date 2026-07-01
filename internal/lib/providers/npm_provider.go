@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 // Injectable shell and OS helpers for tests

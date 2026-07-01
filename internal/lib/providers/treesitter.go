@@ -7,10 +7,10 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
-	"github.com/mistweaverco/zana-client/internal/lib/treesitterdeps"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/treesitterdeps"
 )
 
 // IsTreeSitterParserCategory is true for curated tree-sitter grammar packages.
@@ -71,7 +71,7 @@ func TreeSitterArtifactPath(sourceID, version, language string) string {
 }
 
 // buildTreeSitterParsersToCache builds tree-sitter parser shared libraries from
-// upstream source into Zana's artifact cache and returns the list of languages
+// upstream source into NVPM's artifact cache and returns the list of languages
 // that were built.
 func BuildTreeSitterParsersToCache(
 	repoPath string,

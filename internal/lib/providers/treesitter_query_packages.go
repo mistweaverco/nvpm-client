@@ -8,9 +8,9 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/mattn/go-isatty"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/treesitterdeps"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/treesitterdeps"
 )
 
 // PreflightTreeSitterInjectionQueryPackages resolves Neovim injection host languages declared on
@@ -79,13 +79,13 @@ func resolveNeovimTreeSitterInjectionDependencies(
 	var hint strings.Builder
 	for _, l := range missing {
 		if ids := registrySourceIDsForTreeSitterLanguage(l, reg); len(ids) > 0 {
-			fmt.Fprintf(&hint, "\n• %s — e.g. zana install %s --integrate neovim", l, ids[0])
+			fmt.Fprintf(&hint, "\n• %s — e.g. nvpm install %s --integrate neovim", l, ids[0])
 		} else {
 			fmt.Fprintf(&hint, "\n• %s — install a Tree-sitter-parser package that lists this language in the registry", l)
 		}
 	}
 	title := fmt.Sprintf("Missing tree-sitter grammar(s) for Neovim injections: %s", strings.Join(missing, ", "))
-	desc := "Injected regions in this grammar need these host parsers installed via Zana (Tree-sitter-parser packages whose languages include the names above)." + hint.String()
+	desc := "Injected regions in this grammar need these host parsers installed via NVPM (Tree-sitter-parser packages whose languages include the names above)." + hint.String()
 	action, err := neovimInheritsPrompt(title, desc)
 	if err != nil {
 		return err
@@ -133,7 +133,7 @@ func resolveQueryPackageSourceIDForLanguage(
 	sort.Strings(cands)
 	title := fmt.Sprintf("Multiple Tree-sitter-queries packages for %q (%s)", lang, integration)
 	desc := fmt.Sprintf(
-		"Choose which registry package supplies Neovim queries for this language when installing %s.\n\nThis choice is saved in zana-lock.json.",
+		"Choose which registry package supplies Neovim queries for this language when installing %s.\n\nThis choice is saved in nvpm-lock.json.",
 		consumerSourceID,
 	)
 	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stderr.Fd()) {

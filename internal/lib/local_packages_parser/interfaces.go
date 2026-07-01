@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 )
 
 // FileManager defines the interface for file operations

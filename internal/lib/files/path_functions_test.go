@@ -60,10 +60,10 @@ func TestPathFunctionsComprehensive(t *testing.T) {
 		mockFS := &MockFileSystem{
 			fs: afero.NewMemMapFs(),
 			GetenvFunc: func(key string) string {
-				if key == "ZANA_HOME" {
+				if key == "NVPM_HOME" {
 					return "/cfg"
 				}
-				if key == "ZANA_CACHE" {
+				if key == "NVPM_CACHE" {
 					return "/envcache"
 				}
 				return ""
@@ -87,7 +87,7 @@ func TestPathFunctionsComprehensive(t *testing.T) {
 		mockFS := &MockFileSystem{
 			fs: afero.NewMemMapFs(),
 			GetenvFunc: func(key string) string {
-				if key == "ZANA_HOME" {
+				if key == "NVPM_HOME" {
 					return "/cfg"
 				}
 				return ""
@@ -107,13 +107,13 @@ func TestPathFunctionsComprehensive(t *testing.T) {
 		assert.Equal(t, "/home/user/rel/cache", GetCachePath())
 	})
 
-	t.Run("get app data path with ZANA_HOME set", func(t *testing.T) {
+	t.Run("get app data path with NVPM_HOME set", func(t *testing.T) {
 		// Create an in-memory filesystem for testing
 		mockFS := &MockFileSystem{
 			fs: afero.NewMemMapFs(),
 			GetenvFunc: func(key string) string {
-				if key == "ZANA_HOME" {
-					return "/custom/zana/home"
+				if key == "NVPM_HOME" {
+					return "/custom/nvpm/home"
 				}
 				return ""
 			},
@@ -121,17 +121,17 @@ func TestPathFunctionsComprehensive(t *testing.T) {
 		SetFileSystem(mockFS)
 		defer ResetDependencies()
 
-		// Test that it uses ZANA_HOME when set
+		// Test that it uses NVPM_HOME when set
 		path := GetAppDataPath()
-		assert.Equal(t, "/custom/zana/home", path)
+		assert.Equal(t, "/custom/nvpm/home", path)
 	})
 
-	t.Run("get app data path without ZANA_HOME", func(t *testing.T) {
+	t.Run("get app data path without NVPM_HOME", func(t *testing.T) {
 		// Create an in-memory filesystem for testing
 		mockFS := &MockFileSystem{
 			fs: afero.NewMemMapFs(),
 			GetenvFunc: func(key string) string {
-				return "" // No ZANA_HOME
+				return "" // No NVPM_HOME
 			},
 			UserConfigDirFunc: func() (string, error) {
 				return "/home/user/.config", nil
@@ -140,9 +140,9 @@ func TestPathFunctionsComprehensive(t *testing.T) {
 		SetFileSystem(mockFS)
 		defer ResetDependencies()
 
-		// Test that it uses user config dir when ZANA_HOME is not set
+		// Test that it uses user config dir when NVPM_HOME is not set
 		path := GetAppDataPath()
-		assert.Equal(t, "/home/user/.config/zana", path)
+		assert.Equal(t, "/home/user/.config/nvpm", path)
 	})
 
 	t.Run("path separator with different separators", func(t *testing.T) {
@@ -176,7 +176,7 @@ func TestPathFunctionsErrorPaths(t *testing.T) {
 				return "", errors.New("user config dir error")
 			},
 			GetenvFunc: func(key string) string {
-				return "" // No ZANA_HOME
+				return "" // No NVPM_HOME
 			},
 		}
 		SetFileSystem(mockFS)

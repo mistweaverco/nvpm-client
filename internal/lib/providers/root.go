@@ -3,9 +3,9 @@ package providers
 import (
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/log"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/semver"
+	"github.com/mistweaverco/nvpm-client/internal/lib/log"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/semver"
 )
 
 type Provider int
@@ -100,7 +100,7 @@ func getGenericProvider() PackageManager {
 	return globalFactory.CreateGenericProvider()
 }
 
-// AvailableProviders lists all provider names supported by Zana
+// AvailableProviders lists all provider names supported by NVPM
 var AvailableProviders = []string{
 	"npm",
 	"pypi",

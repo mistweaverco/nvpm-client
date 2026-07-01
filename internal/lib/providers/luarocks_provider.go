@@ -7,10 +7,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 type LuaRocksProvider struct {
@@ -263,7 +263,7 @@ func (p *LuaRocksProvider) createWrappers() error {
 	if len(desired) == 0 {
 		return nil
 	}
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 	for _, pkg := range desired {
 		registryItem := parser.GetBySourceId(pkg.SourceID)
@@ -271,7 +271,7 @@ func (p *LuaRocksProvider) createWrappers() error {
 			continue
 		}
 		for binName, binCmd := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := luarocksLstat(wrapperPath); err == nil {
 				_ = luarocksRemove(wrapperPath)
 			}
@@ -305,9 +305,9 @@ func (p *LuaRocksProvider) createLuaRocksWrapperForCommand(commandToExec string,
 	}
 
 	wrapperContent := fmt.Sprintf(`#!/bin/sh
-# Sets up Lua/LuaRocks environment for zana-installed packages and runs the target command
+# Sets up Lua/LuaRocks environment for nvpm-installed packages and runs the target command
 
-# Add the zana LuaRocks bin directory to PATH
+# Add the nvpm LuaRocks bin directory to PATH
 export PATH="%s:$PATH"
 
 # Add LuaRocks lib directory to LUA_PATH
@@ -326,7 +326,7 @@ exec %s "$@"
 // removeWrappersForPackage removes wrapper scripts for a specific package
 func (p *LuaRocksProvider) removeWrappersForPackage(packageName string) error {
 	desired := lppLuarocksGetDataForProvider("luarocks").Packages
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 
 	for _, pkg := range desired {
@@ -335,7 +335,7 @@ func (p *LuaRocksProvider) removeWrappersForPackage(packageName string) error {
 		}
 		registryItem := parser.GetBySourceId(pkg.SourceID)
 		for binName := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := luarocksLstat(wrapperPath); err == nil {
 				if err := luarocksRemove(wrapperPath); err != nil {
 					Logger.Info(fmt.Sprintf("LuaRocks: Warning removing wrapper %s: %v", wrapperPath, err))

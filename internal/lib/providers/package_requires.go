@@ -8,9 +8,9 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/mattn/go-isatty"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/spinnerutil"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/spinnerutil"
 )
 
 // packageRequiresIsInstalled is injectable for tests.
@@ -96,7 +96,7 @@ func PreflightPackageRequires(registryItem registry_parser.RegistryItem) error {
 }
 
 // EnsureLockfilePackageRequires installs registry-declared dependencies for every
-// package in zana-lock.json. When autoInstall is true, missing deps are installed
+// package in nvpm-lock.json. When autoInstall is true, missing deps are installed
 // without prompts (used by non-interactive sync).
 func EnsureLockfilePackageRequires(autoInstall bool) error {
 	lock := packageRequiresLockData(false)
@@ -136,7 +136,7 @@ func EnsureLockfilePackageRequires(autoInstall bool) error {
 	if !autoInstall {
 		var hint strings.Builder
 		for _, id := range missing {
-			fmt.Fprintf(&hint, "\n• zana install %s", id)
+			fmt.Fprintf(&hint, "\n• nvpm install %s", id)
 		}
 		title := fmt.Sprintf("Missing required package(s) for lockfile: %s", strings.Join(missing, ", "))
 		desc := "These dependencies are declared in the registry and must be installed first." + hint.String()
@@ -176,7 +176,7 @@ func ensurePackageRequires(registryItem registry_parser.RegistryItem, autoInstal
 		sort.Strings(missing)
 		var hint strings.Builder
 		for _, id := range missing {
-			fmt.Fprintf(&hint, "\n• zana install %s", id)
+			fmt.Fprintf(&hint, "\n• nvpm install %s", id)
 		}
 		title := fmt.Sprintf("Missing required package(s) for %s: %s", registryItem.Name, strings.Join(missing, ", "))
 		desc := "These dependencies are declared in the registry and must be installed first." + hint.String()

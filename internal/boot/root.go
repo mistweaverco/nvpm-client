@@ -8,11 +8,11 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/providers"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/providers"
 )
 
-var DEFAULT_REGISTRY_URL = "https://github.com/mistweaverco/zana-registry/releases/latest/download/zana-registry.json.zip"
+var DEFAULT_REGISTRY_URL = "https://github.com/mistweaverco/nvpm-registry/releases/latest/download/nvpm-registry.json.zip"
 
 type errMsg error
 

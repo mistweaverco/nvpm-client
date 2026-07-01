@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://getzana.net/zana-lock.schema.json",
-  "title": "Zana zana-lock.json schema",
+  "$id": "https://nvpm.dev/nvpm-lock.schema.json",
+  "title": "NVPM nvpm-lock.json schema",
   "type": "object",
   "additionalProperties": false,
   "required": ["packages"],

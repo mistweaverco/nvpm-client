@@ -8,10 +8,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 type GolangProvider struct {
@@ -95,14 +95,14 @@ func (p *GolangProvider) createSymlink(sourceID string) error {
 	parser := registry_parser.NewDefaultRegistryParser()
 	registryItem := parser.GetBySourceId(sourceID)
 	golangBinDir := filepath.Join(p.APP_PACKAGES_DIR, "bin")
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 
 	if len(registryItem.Bin) == 0 {
 		return fmt.Errorf("error: no binary name found for package %s", sourceID)
 	}
 
 	for binName := range registryItem.Bin {
-		symlink := filepath.Join(zanaBinDir, binName)
+		symlink := filepath.Join(nvpmBinDir, binName)
 		// Remove any existing symlink with the same name to avoid conflicts
 		if _, err := goLstat(symlink); err == nil {
 			_ = goRemove(symlink)
@@ -142,14 +142,14 @@ func (p *GolangProvider) removeBin(sourceID string) error {
 func (p *GolangProvider) removeSymlink(sourceID string) error {
 	parser := registry_parser.NewDefaultRegistryParser()
 	registryItem := parser.GetBySourceId(sourceID)
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 
 	if len(registryItem.Bin) == 0 {
 		return fmt.Errorf("error: no binary name found for package %s", sourceID)
 	}
 
 	for binName := range registryItem.Bin {
-		symlink := filepath.Join(zanaBinDir, binName)
+		symlink := filepath.Join(nvpmBinDir, binName)
 		if _, err := goLstat(symlink); err == nil {
 			if err := goRemove(symlink); err != nil {
 				return fmt.Errorf("error removing symlink %s: %v", symlink, err)
@@ -214,7 +214,7 @@ func (p *GolangProvider) Sync() bool {
 	desired := local_packages_parser.GetDataForProvider("golang").Packages
 	goModPath := filepath.Join(p.APP_PACKAGES_DIR, "go.mod")
 	if _, err := goStat(goModPath); os.IsNotExist(err) {
-		initCode, err := goShellOut("go", []string{"mod", "init", "zana-golang-packages"}, p.APP_PACKAGES_DIR, nil)
+		initCode, err := goShellOut("go", []string{"mod", "init", "nvpm-golang-packages"}, p.APP_PACKAGES_DIR, nil)
 		if err != nil || initCode != 0 {
 			Logger.Error(fmt.Sprintf("Error initializing Go module: %v", err))
 			return false

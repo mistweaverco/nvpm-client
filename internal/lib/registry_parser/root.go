@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 )
 
 // FileReader interface for dependency injection in tests

@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,7 +18,7 @@ func TestDetectProviderUnsupported(t *testing.T) {
 }
 
 func TestSyncAllInvokesProviderSyncs(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	// Make Go available and Cargo available so their Sync methods run and return fast
 	oldGo := goShellOut
 	oldCargoHas := cargoHasCommand

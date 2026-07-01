@@ -15,11 +15,11 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/mattn/go-isatty"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
-	"github.com/mistweaverco/zana-client/internal/lib/spinnerutil"
-	"github.com/mistweaverco/zana-client/internal/lib/treesitterdeps"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/spinnerutil"
+	"github.com/mistweaverco/nvpm-client/internal/lib/treesitterdeps"
 )
 
 // Injectable helpers for tests
@@ -393,7 +393,7 @@ func neovimBundledQueriesPresent(lang string) (bool, error) {
 }
 
 func neovimForceInstallQueriesFromGrammars() bool {
-	v := strings.ToLower(strings.TrimSpace(neovimGetenv("ZANA_NEOVIM_ALWAYS_INSTALL_QUERIES")))
+	v := strings.ToLower(strings.TrimSpace(neovimGetenv("NVPM_NEOVIM_ALWAYS_INSTALL_QUERIES")))
 	return v == "1" || v == "true" || v == "yes"
 }
 
@@ -486,13 +486,13 @@ func installNeovimParsersAndQueriesFromCache(sourceID, version string, languages
 					if bundled {
 						skipQueries = true
 						destQueries := filepath.Join(queriesRoot, lang)
-						// Older Zana installs may have copied grammar queries here; they take precedence
+						// Older NVPM installs may have copied grammar queries here; they take precedence
 						// over $VIMRUNTIME and can break markdown (and other) treesitter in Neovim.
 						if err := neovimRemoveAll(destQueries); err != nil {
 							return fmt.Errorf("remove shadowing neovim queries %s: %w", lang, err)
 						}
 						AddIntegrationReportLine(sourceID, version, fmt.Sprintf(
-							"Skipped Neovim site/queries install for %s (Neovim runtime already ships highlights; removed stale site/queries/%s if present; set ZANA_NEOVIM_ALWAYS_INSTALL_QUERIES=1 to force grammar queries)",
+							"Skipped Neovim site/queries install for %s (Neovim runtime already ships highlights; removed stale site/queries/%s if present; set NVPM_NEOVIM_ALWAYS_INSTALL_QUERIES=1 to force grammar queries)",
 							lang, lang,
 						))
 					}
@@ -786,13 +786,13 @@ func resolveNeovimTreeSitterInheritDependencies(
 	var hint strings.Builder
 	for _, l := range missing {
 		if ids := registrySourceIDsForTreeSitterLanguage(l, reg); len(ids) > 0 {
-			fmt.Fprintf(&hint, "\n• %s — e.g. zana install %s --integrate neovim", l, ids[0])
+			fmt.Fprintf(&hint, "\n• %s — e.g. nvpm install %s --integrate neovim", l, ids[0])
 		} else {
 			fmt.Fprintf(&hint, "\n• %s — install a Tree-sitter-parser package that lists this language in the registry", l)
 		}
 	}
 	title := fmt.Sprintf("Missing base tree-sitter grammar(s) for Neovim: %s", strings.Join(missing, ", "))
-	desc := "Queries may not resolve inherited captures until these are installed via Zana (Tree-sitter-parser packages whose languages include the names above)." + hint.String()
+	desc := "Queries may not resolve inherited captures until these are installed via NVPM (Tree-sitter-parser packages whose languages include the names above)." + hint.String()
 	action, err := neovimInheritsPrompt(title, desc)
 	if err != nil {
 		return err

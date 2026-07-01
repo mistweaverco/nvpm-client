@@ -10,10 +10,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 type CodebergProvider struct {
@@ -378,7 +378,7 @@ func (p *CodebergProvider) getDefaultBranch(repoPath string) string {
 }
 
 func (p *CodebergProvider) createSymlinks(_ string, repoPath string) error {
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 
 	// Look for common binary locations
 	binDirs := []string{
@@ -402,13 +402,13 @@ func (p *CodebergProvider) createSymlinks(_ string, repoPath string) error {
 						continue
 					}
 					// Create symlink
-					symlink := filepath.Join(zanaBinDir, entry.Name())
+					symlink := filepath.Join(nvpmBinDir, entry.Name())
 					// Remove existing symlink if it exists
 					if _, err := codebergLstat(symlink); err == nil {
 						codebergRemove(symlink)
 					}
 					// Create relative symlink
-					relPath, err := filepath.Rel(zanaBinDir, binPath)
+					relPath, err := filepath.Rel(nvpmBinDir, binPath)
 					if err != nil {
 						relPath = binPath
 					}
@@ -432,16 +432,16 @@ func (p *CodebergProvider) createSymlinks(_ string, repoPath string) error {
 func (p *CodebergProvider) removeSymlinks(repo string) error {
 	repoPath := p.getRepoPath(repo)
 	repoPath = filepath.Clean(repoPath) + string(os.PathSeparator)
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 
 	// Find and remove symlinks that point to this repo
-	entries, err := codebergReadDir(zanaBinDir)
+	entries, err := codebergReadDir(nvpmBinDir)
 	if err != nil {
 		return err
 	}
 
 	for _, entry := range entries {
-		symlink := filepath.Join(zanaBinDir, entry.Name())
+		symlink := filepath.Join(nvpmBinDir, entry.Name())
 		if link, err := codebergLstat(symlink); err == nil {
 			// Check if it's a symlink
 			if link.Mode()&os.ModeSymlink != 0 {
@@ -451,7 +451,7 @@ func (p *CodebergProvider) removeSymlinks(repo string) error {
 				}
 				// Resolve relative path
 				if !filepath.IsAbs(target) {
-					target = filepath.Join(zanaBinDir, target)
+					target = filepath.Join(nvpmBinDir, target)
 				}
 				target = filepath.Clean(target) + string(os.PathSeparator)
 				// Check if target is in our repo path
@@ -683,7 +683,7 @@ func (p *CodebergProvider) findBinaryInDir(dir, name string) string {
 
 // createSymlinksFromRegistry creates symlinks based on registry bin configuration
 func (p *CodebergProvider) createSymlinksFromRegistry(_ string, repoPath string, asset *registry_parser.RegistryItemSourceAsset, registryItem registry_parser.RegistryItem) error {
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 
 	for binName, binTemplate := range registryItem.Bin {
 		binPath := ResolveBinPath(binTemplate, asset, binName)
@@ -703,12 +703,12 @@ func (p *CodebergProvider) createSymlinksFromRegistry(_ string, repoPath string,
 		}
 
 		// Create symlink
-		symlink := filepath.Join(zanaBinDir, binName)
+		symlink := filepath.Join(nvpmBinDir, binName)
 		if _, err := codebergLstat(symlink); err == nil {
 			codebergRemove(symlink)
 		}
 
-		relPath, err := filepath.Rel(zanaBinDir, binaryFile)
+		relPath, err := filepath.Rel(nvpmBinDir, binaryFile)
 		if err != nil {
 			relPath = binaryFile
 		}

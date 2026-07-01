@@ -8,10 +8,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 type ComposerProvider struct {
@@ -337,7 +337,7 @@ func (p *ComposerProvider) createWrappers() error {
 	if len(desired) == 0 {
 		return nil
 	}
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 	for _, pkg := range desired {
 		registryItem := parser.GetBySourceId(pkg.SourceID)
@@ -345,7 +345,7 @@ func (p *ComposerProvider) createWrappers() error {
 			continue
 		}
 		for binName, binCmd := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := composerLstat(wrapperPath); err == nil {
 				_ = composerRemove(wrapperPath)
 			}
@@ -379,9 +379,9 @@ func (p *ComposerProvider) createComposerWrapperForCommand(commandToExec string,
 	}
 
 	wrapperContent := fmt.Sprintf(`#!/bin/sh
-# Sets up PHP/Composer environment for zana-installed packages and runs the target command
+# Sets up PHP/Composer environment for nvpm-installed packages and runs the target command
 
-# Add the zana composer bin directory to PATH
+# Add the nvpm composer bin directory to PATH
 export PATH="%s:$PATH"
 
 # Add composer vendor directory to PHP include path
@@ -400,7 +400,7 @@ exec %s "$@"
 // removeWrappersForPackage removes wrapper scripts for a specific package
 func (p *ComposerProvider) removeWrappersForPackage(packageName string) error {
 	desired := lppComposerGetDataForProvider("composer").Packages
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 
 	for _, pkg := range desired {
@@ -409,7 +409,7 @@ func (p *ComposerProvider) removeWrappersForPackage(packageName string) error {
 		}
 		registryItem := parser.GetBySourceId(pkg.SourceID)
 		for binName := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := composerLstat(wrapperPath); err == nil {
 				if err := composerRemove(wrapperPath); err != nil {
 					Logger.Info(fmt.Sprintf("Composer: Warning removing wrapper %s: %v", wrapperPath, err))

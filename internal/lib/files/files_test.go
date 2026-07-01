@@ -190,7 +190,7 @@ func (m *MockFileSystem) UserConfigDir() (string, error) {
 	if m.UserConfigDirFunc != nil {
 		return m.UserConfigDirFunc()
 	}
-	return "/tmp/zana_test", nil
+	return "/tmp/nvpm_test", nil
 }
 
 func (m *MockFileSystem) UserHomeDir() (string, error) {
@@ -211,8 +211,8 @@ func (m *MockFileSystem) Getenv(key string) string {
 	if m.GetenvFunc != nil {
 		return m.GetenvFunc(key)
 	}
-	if key == "ZANA_HOME" {
-		return "/tmp/zana_test"
+	if key == "NVPM_HOME" {
+		return "/tmp/nvpm_test"
 	}
 	return ""
 }
@@ -339,7 +339,7 @@ func TestEnsureDirExists(t *testing.T) {
 	assert.True(t, info.IsDir())
 }
 
-// TestGenerateZanaGitIgnore removed - function no longer needed since registry files are in cache folder
+// TestGenerateNvpmGitIgnore removed - function no longer needed since registry files are in cache folder
 
 // TestDownloadWithCache for testing download operations
 func TestDownloadWithCache(t *testing.T) {
@@ -536,8 +536,8 @@ func TestDownloadAndUnzipRegistry(t *testing.T) {
 		defer ResetDependencies()
 
 		// Set custom registry URL list
-		os.Setenv("ZANA_REGISTRY_URLS", "http://custom.example.com/registry.zip")
-		defer os.Unsetenv("ZANA_REGISTRY_URLS")
+		os.Setenv("NVPM_REGISTRY_URLS", "http://custom.example.com/registry.zip")
+		defer os.Unsetenv("NVPM_REGISTRY_URLS")
 
 		// Test that the function can be called (it will fail due to mock HTTP client)
 		// but we're testing the function structure
@@ -585,7 +585,7 @@ func TestDownloadAndUnzipRegistry(t *testing.T) {
 		defer ResetDependencies()
 
 		mockFS.GetenvFunc = func(key string) string {
-			if key == "ZANA_REGISTRY_URLS" {
+			if key == "NVPM_REGISTRY_URLS" {
 				return "http://registry-a.example/registry.zip, http://registry-b.example/registry.zip"
 			}
 			return ""
@@ -607,12 +607,12 @@ func TestDownloadAndUnzipRegistry(t *testing.T) {
 				// First registry uses the historical fixed cache filename.
 				if strings.Contains(name, "registry-cache.json.zip") {
 					return createRealZipArchive(map[string]string{
-						"zana-registry.json": zipA,
+						"nvpm-registry.json": zipA,
 					})
 				}
 				// Second registry uses hashed cache filename.
 				return createRealZipArchive(map[string]string{
-					"zana-registry.json": zipB,
+					"nvpm-registry.json": zipB,
 				})
 			},
 		})
@@ -892,11 +892,11 @@ func TestUnzipComprehensive(t *testing.T) {
 	})
 }
 
-// TestGenerateZanaGitIgnoreComprehensive removed - function no longer needed since registry files are in cache folder
+// TestGenerateNvpmGitIgnoreComprehensive removed - function no longer needed since registry files are in cache folder
 
 // TestGetAppDataPathComprehensive tests all branches of GetAppDataPath
 func TestGetAppDataPathComprehensive(t *testing.T) {
-	t.Run("get app data path with ZANA_HOME set", func(t *testing.T) {
+	t.Run("get app data path with NVPM_HOME set", func(t *testing.T) {
 		// Create an in-memory filesystem for testing
 		mockFS := &MockFileSystem{
 			fs: afero.NewMemMapFs(),
@@ -904,24 +904,24 @@ func TestGetAppDataPathComprehensive(t *testing.T) {
 		SetFileSystem(mockFS)
 		defer ResetDependencies()
 
-		// Set ZANA_HOME environment variable
-		os.Setenv("ZANA_HOME", "/custom/zana/path")
-		defer os.Unsetenv("ZANA_HOME")
+		// Set NVPM_HOME environment variable
+		os.Setenv("NVPM_HOME", "/custom/nvpm/path")
+		defer os.Unsetenv("NVPM_HOME")
 
-		// Test that it uses ZANA_HOME
+		// Test that it uses NVPM_HOME
 		// We need to override the Getenv function to return our custom value
 		mockFS.GetenvFunc = func(key string) string {
-			if key == "ZANA_HOME" {
-				return "/custom/zana/path"
+			if key == "NVPM_HOME" {
+				return "/custom/nvpm/path"
 			}
 			return ""
 		}
 
 		result := GetAppDataPath()
-		assert.Equal(t, "/custom/zana/path", result)
+		assert.Equal(t, "/custom/nvpm/path", result)
 	})
 
-	t.Run("get app data path without ZANA_HOME", func(t *testing.T) {
+	t.Run("get app data path without NVPM_HOME", func(t *testing.T) {
 		// Create an in-memory filesystem for testing
 		mockFS := &MockFileSystem{
 			fs: afero.NewMemMapFs(),
@@ -929,12 +929,12 @@ func TestGetAppDataPathComprehensive(t *testing.T) {
 		SetFileSystem(mockFS)
 		defer ResetDependencies()
 
-		// Ensure ZANA_HOME is not set
-		os.Unsetenv("ZANA_HOME")
+		// Ensure NVPM_HOME is not set
+		os.Unsetenv("NVPM_HOME")
 
 		// Test that it uses user config dir
 		result := GetAppDataPath()
-		assert.Contains(t, result, "zana")
+		assert.Contains(t, result, "nvpm")
 	})
 
 	t.Run("get app data path with user config dir error", func(t *testing.T) {
@@ -948,9 +948,9 @@ func TestGetAppDataPathComprehensive(t *testing.T) {
 		SetFileSystem(mockFS)
 		defer ResetDependencies()
 
-		// Ensure ZANA_HOME is not set by overriding the Getenv function
+		// Ensure NVPM_HOME is not set by overriding the Getenv function
 		mockFS.GetenvFunc = func(key string) string {
-			return "" // No ZANA_HOME
+			return "" // No NVPM_HOME
 		}
 
 		// This should panic
@@ -1108,19 +1108,19 @@ func TestPathSeparatorComprehensive(t *testing.T) {
 
 // TestEnvironmentVariables tests environment variable handling
 func TestEnvironmentVariables(t *testing.T) {
-	t.Run("ZANA_HOME environment variable", func(t *testing.T) {
-		// Test that ZANA_HOME is respected
-		originalZanaHome := os.Getenv("ZANA_HOME")
+	t.Run("NVPM_HOME environment variable", func(t *testing.T) {
+		// Test that NVPM_HOME is respected
+		originalNvpmHome := os.Getenv("NVPM_HOME")
 		defer func() {
-			if originalZanaHome != "" {
-				os.Setenv("ZANA_HOME", originalZanaHome)
+			if originalNvpmHome != "" {
+				os.Setenv("NVPM_HOME", originalNvpmHome)
 			} else {
-				os.Unsetenv("ZANA_HOME")
+				os.Unsetenv("NVPM_HOME")
 			}
 		}()
 
-		// Set ZANA_HOME
-		os.Setenv("ZANA_HOME", "/custom/zana/path")
+		// Set NVPM_HOME
+		os.Setenv("NVPM_HOME", "/custom/nvpm/path")
 
 		// Create an in-memory filesystem for testing
 		mockFS := &MockFileSystem{
@@ -1131,29 +1131,29 @@ func TestEnvironmentVariables(t *testing.T) {
 
 		// Override Getenv to return our custom value
 		mockFS.GetenvFunc = func(key string) string {
-			if key == "ZANA_HOME" {
-				return "/custom/zana/path"
+			if key == "NVPM_HOME" {
+				return "/custom/nvpm/path"
 			}
 			return ""
 		}
 
 		result := GetAppDataPath()
-		assert.Equal(t, "/custom/zana/path", result)
+		assert.Equal(t, "/custom/nvpm/path", result)
 	})
 
-	t.Run("ZANA_REGISTRY_URLS environment variable", func(t *testing.T) {
-		// Test that ZANA_REGISTRY_URLS is respected
-		originalRegistryURL := os.Getenv("ZANA_REGISTRY_URLS")
+	t.Run("NVPM_REGISTRY_URLS environment variable", func(t *testing.T) {
+		// Test that NVPM_REGISTRY_URLS is respected
+		originalRegistryURL := os.Getenv("NVPM_REGISTRY_URLS")
 		defer func() {
 			if originalRegistryURL != "" {
-				os.Setenv("ZANA_REGISTRY_URLS", originalRegistryURL)
+				os.Setenv("NVPM_REGISTRY_URLS", originalRegistryURL)
 			} else {
-				os.Unsetenv("ZANA_REGISTRY_URLS")
+				os.Unsetenv("NVPM_REGISTRY_URLS")
 			}
 		}()
 
-		// Set ZANA_REGISTRY_URLS
-		os.Setenv("ZANA_REGISTRY_URLS", "http://custom.example.com/registry.zip")
+		// Set NVPM_REGISTRY_URLS
+		os.Setenv("NVPM_REGISTRY_URLS", "http://custom.example.com/registry.zip")
 
 		// Create an in-memory filesystem for testing
 		mockFS := &MockFileSystem{
@@ -1442,7 +1442,7 @@ func TestRealZipFileOpener(t *testing.T) {
 	})
 }
 
-// TestGenerateZanaGitIgnoreErrorPaths removed - function no longer needed since registry files are in cache folder
+// TestGenerateNvpmGitIgnoreErrorPaths removed - function no longer needed since registry files are in cache folder
 
 // TestEnsureDirExistsErrorPaths tests error paths in EnsureDirExists
 func TestEnsureDirExistsErrorPaths(t *testing.T) {
@@ -1721,7 +1721,7 @@ func TestDownloadAndUnzipRegistryErrorPaths(t *testing.T) {
 		mockFS := &MockFileSystem{
 			fs: afero.NewMemMapFs(),
 			GetenvFunc: func(key string) string {
-				if key == "ZANA_REGISTRY_URLS" {
+				if key == "NVPM_REGISTRY_URLS" {
 					return "http://custom.example.com/registry.zip"
 				}
 				return ""
@@ -1757,7 +1757,7 @@ func TestDownloadAndUnzipRegistryErrorPaths(t *testing.T) {
 		// Create cache directory and files in the real cache path the code uses
 		cacheDir := GetCachePath()
 		cachePath := cacheDir + "/registry-cache.json.zip"
-		jsonPath := cacheDir + "/zana-registry.json"
+		jsonPath := cacheDir + "/nvpm-registry.json"
 
 		// Create an older JSON file
 		jsonFile, err := mockFS.fs.Create(jsonPath)
@@ -1809,7 +1809,7 @@ func TestGetAppDataPathErrorPaths(t *testing.T) {
 				return "", errors.New("user config dir error")
 			},
 			GetenvFunc: func(key string) string {
-				return "" // No ZANA_HOME
+				return "" // No NVPM_HOME
 			},
 		}
 		SetFileSystem(mockFS)
@@ -2007,11 +2007,11 @@ func TestSpecificBranches(t *testing.T) {
 // TestErrorHandling tests various error handling scenarios
 func TestErrorHandling(t *testing.T) {
 	t.Run("generate gitignore with write error - removed", func(t *testing.T) {
-		t.Skip("Test removed - GenerateZanaGitIgnore function no longer exists")
+		t.Skip("Test removed - GenerateNvpmGitIgnore function no longer exists")
 	})
 
 	t.Run("generate gitignore with file close error - removed", func(t *testing.T) {
-		t.Skip("Test removed - GenerateZanaGitIgnore function no longer exists")
+		t.Skip("Test removed - GenerateNvpmGitIgnore function no longer exists")
 	})
 
 	t.Run("ensure dir exists with mkdir error", func(t *testing.T) {
@@ -2447,7 +2447,7 @@ func TestAdditionalEdgeCases(t *testing.T) {
 		mockZipOpener := &MockZipFileOpener{
 			OpenFunc: func(name string) (ZipArchive, error) {
 				return createRealZipArchive(map[string]string{
-					"zana-registry.json": `[]`,
+					"nvpm-registry.json": `[]`,
 				})
 			},
 		}
@@ -2740,7 +2740,7 @@ func TestUncoveredBranches(t *testing.T) {
 		mockZipOpener := &MockZipFileOpener{
 			OpenFunc: func(name string) (ZipArchive, error) {
 				return createRealZipArchive(map[string]string{
-					"zana-registry.json": `[]`,
+					"nvpm-registry.json": `[]`,
 				})
 			},
 		}

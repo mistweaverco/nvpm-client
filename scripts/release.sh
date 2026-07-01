@@ -3,7 +3,7 @@
 if [ -z "$VERSION" ]; then echo "Error: VERSION is not set"; exit 1; fi
 if [ -z "$PLATFORM" ]; then echo "Error: PLATFORM is not set"; exit 1; fi
 
-BIN_NAME="zana"
+BIN_NAME="nvpm"
 RELEASE_ACTION="create"
 GH_TAG="v$VERSION"
 FILES=()

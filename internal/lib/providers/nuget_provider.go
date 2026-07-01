@@ -7,10 +7,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 type NuGetProvider struct {
@@ -79,7 +79,7 @@ func (p *NuGetProvider) Install(sourceID, version string) bool {
 	}
 
 	// Create a temporary project file for tool installation
-	projectPath := filepath.Join(p.APP_PACKAGES_DIR, "zana-tools.csproj")
+	projectPath := filepath.Join(p.APP_PACKAGES_DIR, "nvpm-tools.csproj")
 	projectContent := `<?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -279,7 +279,7 @@ func (p *NuGetProvider) createWrappers() error {
 	if len(desired) == 0 {
 		return nil
 	}
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 	for _, pkg := range desired {
 		registryItem := parser.GetBySourceId(pkg.SourceID)
@@ -287,7 +287,7 @@ func (p *NuGetProvider) createWrappers() error {
 			continue
 		}
 		for binName, binCmd := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := nugetLstat(wrapperPath); err == nil {
 				_ = nugetRemove(wrapperPath)
 			}
@@ -320,9 +320,9 @@ func (p *NuGetProvider) createNuGetWrapperForCommand(commandToExec string, wrapp
 	}
 
 	wrapperContent := fmt.Sprintf(`#!/bin/sh
-# Sets up .NET/NuGet environment for zana-installed packages and runs the target command
+# Sets up .NET/NuGet environment for nvpm-installed packages and runs the target command
 
-# Add the zana NuGet tools directory to PATH
+# Add the nvpm NuGet tools directory to PATH
 export PATH="%s:$PATH"
 
 # Execute the command from registry
@@ -338,7 +338,7 @@ exec %s "$@"
 // removeWrappersForPackage removes wrapper scripts for a specific package
 func (p *NuGetProvider) removeWrappersForPackage(packageName string) error {
 	desired := lppNugetGetDataForProvider("nuget").Packages
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 
 	for _, pkg := range desired {
@@ -347,7 +347,7 @@ func (p *NuGetProvider) removeWrappersForPackage(packageName string) error {
 		}
 		registryItem := parser.GetBySourceId(pkg.SourceID)
 		for binName := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := nugetLstat(wrapperPath); err == nil {
 				if err := nugetRemove(wrapperPath); err != nil {
 					Logger.Info(fmt.Sprintf("NuGet: Warning removing wrapper %s: %v", wrapperPath, err))

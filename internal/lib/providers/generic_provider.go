@@ -9,10 +9,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 type GenericProvider struct {
@@ -337,7 +337,7 @@ func (p *GenericProvider) extractArchive(archivePath, destDir string) error {
 
 // createSymlinksFromRegistry creates symlinks based on registry bin configuration
 func (p *GenericProvider) createSymlinksFromRegistry(packageName, extractDir string, download *registry_parser.RegistryItemSourceDownloadFile, registryItem registry_parser.RegistryItem) error {
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 
 	for binName, binTemplate := range registryItem.Bin {
 		// Resolve bin path template (e.g., "{{source.download.bin}}")
@@ -367,12 +367,12 @@ func (p *GenericProvider) createSymlinksFromRegistry(packageName, extractDir str
 		}
 
 		// Create symlink
-		symlink := filepath.Join(zanaBinDir, binName)
+		symlink := filepath.Join(nvpmBinDir, binName)
 		if _, err := genericLstat(symlink); err == nil {
 			genericRemove(symlink)
 		}
 
-		relPath, err := filepath.Rel(zanaBinDir, binaryFile)
+		relPath, err := filepath.Rel(nvpmBinDir, binaryFile)
 		if err != nil {
 			relPath = binaryFile
 		}
@@ -410,16 +410,16 @@ func (p *GenericProvider) findBinaryInDir(dir, name string) string {
 
 // removeSymlinks removes symlinks for a specific package
 func (p *GenericProvider) removeSymlinks(packageName string) error {
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	packageDir := filepath.Join(p.APP_PACKAGES_DIR, packageName)
 
-	entries, err := genericReadDir(zanaBinDir)
+	entries, err := genericReadDir(nvpmBinDir)
 	if err != nil {
 		return err
 	}
 
 	for _, entry := range entries {
-		symlink := filepath.Join(zanaBinDir, entry.Name())
+		symlink := filepath.Join(nvpmBinDir, entry.Name())
 		if link, err := genericLstat(symlink); err == nil {
 			if link.Mode()&os.ModeSymlink != 0 {
 				target, err := os.Readlink(symlink)
@@ -427,7 +427,7 @@ func (p *GenericProvider) removeSymlinks(packageName string) error {
 					continue
 				}
 				if !filepath.IsAbs(target) {
-					target = filepath.Join(zanaBinDir, target)
+					target = filepath.Join(nvpmBinDir, target)
 				}
 				if strings.HasPrefix(target, packageDir) {
 					if err := genericRemove(symlink); err != nil {

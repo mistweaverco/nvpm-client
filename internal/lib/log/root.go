@@ -13,9 +13,9 @@ func SetLogLevel(level slog.Level) {
 
 func NewLogger() *slog.Logger {
 	logLevel = slog.LevelError
-	// If the ZANA_DEBUG environment variable is set,
-	if os.Getenv("ZANA_DEBUG") != "" {
-		switch os.Getenv("ZANA_DEBUG") {
+	// If the NVPM_DEBUG environment variable is set,
+	if os.Getenv("NVPM_DEBUG") != "" {
+		switch os.Getenv("NVPM_DEBUG") {
 		case "debug":
 			logLevel = slog.LevelDebug
 		case "info":

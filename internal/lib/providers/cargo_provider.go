@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 type CargoProvider struct {
@@ -63,7 +63,7 @@ func (p *CargoProvider) getRepo(sourceID string) string {
 
 func (p *CargoProvider) createSymlinks() error {
 	cargoBinDir := filepath.Join(p.APP_PACKAGES_DIR, "bin")
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	if _, err := cargoStat(cargoBinDir); os.IsNotExist(err) {
 		return nil
 	}
@@ -77,7 +77,7 @@ func (p *CargoProvider) createSymlinks() error {
 		}
 		binaryName := entry.Name()
 		binaryPath := filepath.Join(cargoBinDir, binaryName)
-		symlinkPath := filepath.Join(zanaBinDir, binaryName)
+		symlinkPath := filepath.Join(nvpmBinDir, binaryName)
 		if _, err := cargoLstat(symlinkPath); err == nil {
 			if err := cargoRemove(symlinkPath); err != nil {
 				log.Printf("Warning: failed to remove existing symlink %s: %v", symlinkPath, err)
@@ -95,9 +95,9 @@ func (p *CargoProvider) createSymlinks() error {
 }
 
 func (p *CargoProvider) removeAllSymlinks() error {
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	cargoBinDir := filepath.Join(p.APP_PACKAGES_DIR, "bin")
-	entries, err := cargoReadDir(zanaBinDir)
+	entries, err := cargoReadDir(nvpmBinDir)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (p *CargoProvider) removeAllSymlinks() error {
 		if entry.IsDir() {
 			continue
 		}
-		symlinkPath := filepath.Join(zanaBinDir, entry.Name())
+		symlinkPath := filepath.Join(nvpmBinDir, entry.Name())
 		fi, err := cargoLstat(symlinkPath)
 		if err != nil {
 			continue
@@ -199,7 +199,7 @@ func (p *CargoProvider) Sync() bool {
 			// If lockfile still has "latest", update it to the resolved version
 			if pkg.Version != desiredVersion {
 				if err := lppCargoAdd(pkg.SourceID, desiredVersion); err != nil {
-					log.Printf("Warning: failed to update zana-lock.json for %s: %v", crate, err)
+					log.Printf("Warning: failed to update nvpm-lock.json for %s: %v", crate, err)
 				}
 			}
 			skippedCount++
@@ -221,7 +221,7 @@ func (p *CargoProvider) Sync() bool {
 		// Persist resolved version to lockfile (covers cases where requested was "latest")
 		if pkg.Version != desiredVersion {
 			if err := lppCargoAdd(pkg.SourceID, desiredVersion); err != nil {
-				log.Printf("Warning: failed to update zana-lock.json for %s: %v", crate, err)
+				log.Printf("Warning: failed to update nvpm-lock.json for %s: %v", crate, err)
 			}
 		}
 		installedCount++

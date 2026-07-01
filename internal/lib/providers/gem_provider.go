@@ -7,10 +7,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 type GemProvider struct {
@@ -322,12 +322,12 @@ func (p *GemProvider) findGemBinDir() string {
 
 // createWrappers creates wrapper scripts for gem executables
 func (p *GemProvider) createWrappers() error {
-	// Create wrappers based on zana-registry.json bin attribute
+	// Create wrappers based on nvpm-registry.json bin attribute
 	desired := lppGemGetDataForProvider("gem").Packages
 	if len(desired) == 0 {
 		return nil
 	}
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 	for _, pkg := range desired {
 		registryItem := parser.GetBySourceId(pkg.SourceID)
@@ -335,7 +335,7 @@ func (p *GemProvider) createWrappers() error {
 			continue
 		}
 		for binName, binCmd := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			// Remove any existing wrapper with the same name to avoid conflicts
 			if _, err := gemLstat(wrapperPath); err == nil {
 				_ = gemRemove(wrapperPath)
@@ -379,9 +379,9 @@ func (p *GemProvider) createGemWrapperForCommand(commandToExec string, wrapperPa
 	}
 
 	wrapperContent := fmt.Sprintf(`#!/bin/sh
-# Sets up Ruby/Gem environment for zana-installed packages and runs the target command
+# Sets up Ruby/Gem environment for nvpm-installed packages and runs the target command
 
-# Add the zana gem bin directory to PATH
+# Add the nvpm gem bin directory to PATH
 export PATH="%s:$PATH"
 
 # Add gem lib directories to RUBYLIB
@@ -417,7 +417,7 @@ func (p *GemProvider) findGemExecutable(gemLibDir, execPath string) string {
 // removeWrappersForGem removes wrapper scripts for a specific gem
 func (p *GemProvider) removeWrappersForGem(gemName string) error {
 	desired := lppGemGetDataForProvider("gem").Packages
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 
 	// Find packages that match this gem
@@ -427,7 +427,7 @@ func (p *GemProvider) removeWrappersForGem(gemName string) error {
 		}
 		registryItem := parser.GetBySourceId(pkg.SourceID)
 		for binName := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := gemLstat(wrapperPath); err == nil {
 				if err := gemRemove(wrapperPath); err != nil {
 					Logger.Info(fmt.Sprintf("Gem: Warning removing wrapper %s: %v", wrapperPath, err))

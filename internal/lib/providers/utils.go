@@ -1,6 +1,6 @@
 package providers
 
-import "github.com/mistweaverco/zana-client/internal/lib/shell_out"
+import "github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 
 // ProviderHealthStatus represents the health status of a single provider
 type ProviderHealthStatus struct {

@@ -8,10 +8,10 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/mattn/go-isatty"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/spinnerutil"
-	"github.com/mistweaverco/zana-client/internal/lib/treesitterdeps"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/spinnerutil"
+	"github.com/mistweaverco/nvpm-client/internal/lib/treesitterdeps"
 )
 
 // PreflightTreeSitterParserRequirements installs missing parser-grammar dependencies declared via
@@ -156,7 +156,7 @@ func resolveParserSourceIDForLanguage(lang string, reg *registry_parser.Registry
 	}
 	sort.Strings(cands)
 	title := fmt.Sprintf("Multiple registry parsers provide language %q", lang)
-	desc := fmt.Sprintf("Choose which package to use when resolving dependencies for %s.\n\nThis choice is saved in zana-lock.json for this package.", consumerSourceID)
+	desc := fmt.Sprintf("Choose which package to use when resolving dependencies for %s.\n\nThis choice is saved in nvpm-lock.json for this package.", consumerSourceID)
 	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stderr.Fd()) {
 		return "", fmt.Errorf("%s\n%s\n\nNon-interactive session: add extras.treesitter_parser_choices to the lock row for %s with {\"language\":%q,\"sourceId\":\"...\"} (candidates: %s)",
 			title, desc, consumerSourceID, lang, strings.Join(cands, ", "))

@@ -10,7 +10,7 @@ import (
 // marshalIndent is a package-level variable to allow injection during tests
 var marshalIndent = json.MarshalIndent
 
-const lockSchemaURL = "https://getzana.net/zana-lock.schema.json"
+const lockSchemaURL = "https://nvpm.dev/nvpm-lock.schema.json"
 
 type LocalPackageItem struct {
 	SourceID string         `json:"sourceId"`
@@ -27,7 +27,7 @@ type PackageExtras struct {
 	// when several entries provide the same language for an editor integration.
 	TreeSitterQueryChoices []TreeSitterQueryChoice `json:"treesitter_query_choices,omitempty"`
 	// TreeSitterExternalQueries pins optional external query-only git deps (commit SHA per repo URL)
-	// so zana sync can reproduce the same query trees without re-resolving semver. Multiple rows may
+	// so nvpm sync can reproduce the same query trees without re-resolving semver. Multiple rows may
 	// share the same language when several query-only repositories apply.
 	TreeSitterExternalQueries []TreeSitterExternalQueryPin `json:"treesitter_external_queries,omitempty"`
 }
@@ -79,7 +79,7 @@ func NewWithFileManager(fileManager FileManager) *LocalPackagesParser {
 
 // normalizePackageID converts a package ID from legacy format (pkg:provider/pkg)
 // to the new format (provider:pkg), or returns it unchanged if already in new format.
-// This ensures backward compatibility when reading zana-lock.json files.
+// This ensures backward compatibility when reading nvpm-lock.json files.
 func normalizePackageID(sourceID string) string {
 	if strings.HasPrefix(sourceID, "pkg:") {
 		rest := strings.TrimPrefix(sourceID, "pkg:")

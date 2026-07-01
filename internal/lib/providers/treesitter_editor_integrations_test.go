@@ -3,7 +3,7 @@ package providers
 import (
 	"testing"
 
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/stretchr/testify/require"
 )
 

@@ -9,7 +9,7 @@ import (
 
 func TestBoot(t *testing.T) {
 	t.Run("default registry URL constant", func(t *testing.T) {
-		expectedURL := "https://github.com/mistweaverco/zana-registry/releases/latest/download/zana-registry.json.zip"
+		expectedURL := "https://github.com/mistweaverco/nvpm-registry/releases/latest/download/nvpm-registry.json.zip"
 		assert.Equal(t, expectedURL, DEFAULT_REGISTRY_URL)
 	})
 

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mistweaverco/zana-client/internal/lib/spinnerutil"
+	"github.com/mistweaverco/nvpm-client/internal/lib/spinnerutil"
 	"github.com/spf13/afero"
 	"gopkg.in/yaml.v3"
 )
@@ -184,9 +184,9 @@ func Download(url string, dest string) error {
 }
 
 // GetAppLocalPackagesFilePath returns the path to the local packages file
-// e.g. /home/user/.config/zana/zana-lock.json
+// e.g. /home/user/.config/nvpm/nvpm-lock.json
 func GetAppLocalPackagesFilePath() string {
-	return GetAppDataPath() + string(os.PathSeparator) + "zana-lock.json"
+	return GetAppDataPath() + string(os.PathSeparator) + "nvpm-lock.json"
 }
 
 func FileExists(path string) bool {
@@ -202,18 +202,18 @@ func FileExists(path string) bool {
 }
 
 // GetAppDataPath returns the path to the app data directory
-// If the ZANA_HOME environment variable is set, it will use that path
+// If the NVPM_HOME environment variable is set, it will use that path
 // otherwise it will use the user's config directory
-// e.g. /home/user/.config/zana
+// e.g. /home/user/.config/nvpm
 func GetAppDataPath() string {
-	if zanaHome := fileSystem.Getenv("ZANA_HOME"); zanaHome != "" {
-		return EnsureDirExists(zanaHome)
+	if nvpmHome := fileSystem.Getenv("NVPM_HOME"); nvpmHome != "" {
+		return EnsureDirExists(nvpmHome)
 	}
 	userConfigDir, err := fileSystem.UserConfigDir()
 	if err != nil {
 		panic(err)
 	}
-	return EnsureDirExists(userConfigDir + string(os.PathSeparator) + "zana")
+	return EnsureDirExists(userConfigDir + string(os.PathSeparator) + "nvpm")
 }
 
 // GetTempPath returns the path to the temp directory
@@ -223,16 +223,16 @@ func GetTempPath() string {
 }
 
 // GetAppRegistryFilePath returns the path to the registry file
-// e.g. /home/user/.cache/zana/zana-registry.json
+// e.g. /home/user/.cache/nvpm/nvpm-registry.json
 func GetAppRegistryFilePath() string {
-	return GetCachePath() + string(os.PathSeparator) + "zana-registry.json"
+	return GetCachePath() + string(os.PathSeparator) + "nvpm-registry.json"
 }
 
 // GetAppPackagesPath returns the path to the packages directory
 // Otherwise:
-//   - Linux: ~/.local/share/zana/packages
-//   - macOS: ~/Library/Application Support/zana/packages
-//   - Windows: %APPDATA%\zana\packages
+//   - Linux: ~/.local/share/nvpm/packages
+//   - macOS: ~/Library/Application Support/nvpm/packages
+//   - Windows: %APPDATA%\nvpm\packages
 func GetAppPackagesPath() string {
 	return EnsureDirExists(GetAppDataSharePath() + string(os.PathSeparator) + "packages")
 }
@@ -240,9 +240,9 @@ func GetAppPackagesPath() string {
 // GetAppDataSharePath returns the path to the app data share directory
 // This is separate from the config directory and follows XDG Base Directory spec
 // Otherwise:
-//   - Linux: ~/.local/share/zana
-//   - macOS: ~/Library/Application Support/zana (same as config)
-//   - Windows: %APPDATA%\zana (same as config)
+//   - Linux: ~/.local/share/nvpm
+//   - macOS: ~/Library/Application Support/nvpm (same as config)
+//   - Windows: %APPDATA%\nvpm (same as config)
 func GetAppDataSharePath() string {
 	// On Linux, use ~/.local/share, otherwise use config dir (macOS/Windows)
 	userConfigDir, err := fileSystem.UserConfigDir()
@@ -258,20 +258,20 @@ func GetAppDataSharePath() string {
 		if err != nil {
 			panic(err)
 		}
-		return EnsureDirExists(userHomeDir + string(os.PathSeparator) + ".local" + string(os.PathSeparator) + "share" + string(os.PathSeparator) + "zana")
+		return EnsureDirExists(userHomeDir + string(os.PathSeparator) + ".local" + string(os.PathSeparator) + "share" + string(os.PathSeparator) + "nvpm")
 	}
 
 	// macOS and Windows: use config directory (same location)
-	return EnsureDirExists(userConfigDir + string(os.PathSeparator) + "zana")
+	return EnsureDirExists(userConfigDir + string(os.PathSeparator) + "nvpm")
 }
 
 // GetAppBinPath returns the path to the bin directory
 // Otherwise:
-//   - Linux: ~/.local/share/zana/bin
-//   - macOS: ~/Library/Application Support/zana/bin
-//   - Windows: %APPDATA%\zana\bin
+//   - Linux: ~/.local/share/nvpm/bin
+//   - macOS: ~/Library/Application Support/nvpm/bin
+//   - Windows: %APPDATA%\nvpm\bin
 //
-// e.g. /home/user/.local/share/zana/bin
+// e.g. /home/user/.local/share/nvpm/bin
 func GetAppBinPath() string {
 	return EnsureDirExists(GetAppDataSharePath() + string(os.PathSeparator) + "bin")
 }
@@ -357,17 +357,17 @@ func Unzip(src, dest string) error {
 }
 
 // GetCachePath returns the path to the cache directory
-// If ZANA_CACHE is set, it will use that path
+// If NVPM_CACHE is set, it will use that path
 // Otherwise:
-//   - Linux: ~/.cache/zana
-//   - macOS: ~/Library/Caches/zana
-//   - Windows: %LOCALAPPDATA%\zana\cache
+//   - Linux: ~/.cache/nvpm
+//   - macOS: ~/Library/Caches/nvpm
+//   - Windows: %LOCALAPPDATA%\nvpm\cache
 func GetCachePath() string {
-	if zanaCache := fileSystem.Getenv("ZANA_CACHE"); zanaCache != "" {
-		return EnsureDirExists(zanaCache)
+	if nvpmCache := fileSystem.Getenv("NVPM_CACHE"); nvpmCache != "" {
+		return EnsureDirExists(nvpmCache)
 	}
 
-	if cfg, ok := readZanaConfigFile(); ok {
+	if cfg, ok := readNvpmConfigFile(); ok {
 		if raw := strings.TrimSpace(cfg.Paths.CacheDir); raw != "" {
 			return EnsureDirExists(expandUserAndRelativePath(raw))
 		}
@@ -381,36 +381,36 @@ func GetCachePath() string {
 	var cacheDir string
 	switch runtime.GOOS {
 	case "linux":
-		// Linux: ~/.cache/zana (XDG Base Directory spec)
-		cacheDir = userHomeDir + string(os.PathSeparator) + ".cache" + string(os.PathSeparator) + "zana"
+		// Linux: ~/.cache/nvpm (XDG Base Directory spec)
+		cacheDir = userHomeDir + string(os.PathSeparator) + ".cache" + string(os.PathSeparator) + "nvpm"
 	case "darwin":
-		// macOS: ~/Library/Caches/zana
-		cacheDir = userHomeDir + string(os.PathSeparator) + "Library" + string(os.PathSeparator) + "Caches" + string(os.PathSeparator) + "zana"
+		// macOS: ~/Library/Caches/nvpm
+		cacheDir = userHomeDir + string(os.PathSeparator) + "Library" + string(os.PathSeparator) + "Caches" + string(os.PathSeparator) + "nvpm"
 	case "windows":
-		// Windows: %LOCALAPPDATA%\zana\cache
+		// Windows: %LOCALAPPDATA%\nvpm\cache
 		// Try LOCALAPPDATA first, fallback to APPDATA if not set
 		localAppData := fileSystem.Getenv("LOCALAPPDATA")
 		if localAppData == "" {
 			appData := fileSystem.Getenv("APPDATA")
 			if appData != "" {
-				cacheDir = appData + string(os.PathSeparator) + "zana" + string(os.PathSeparator) + "cache"
+				cacheDir = appData + string(os.PathSeparator) + "nvpm" + string(os.PathSeparator) + "cache"
 			} else {
 				// Fallback to user home
-				cacheDir = userHomeDir + string(os.PathSeparator) + ".zana" + string(os.PathSeparator) + "cache"
+				cacheDir = userHomeDir + string(os.PathSeparator) + ".nvpm" + string(os.PathSeparator) + "cache"
 			}
 		} else {
-			cacheDir = localAppData + string(os.PathSeparator) + "zana" + string(os.PathSeparator) + "cache"
+			cacheDir = localAppData + string(os.PathSeparator) + "nvpm" + string(os.PathSeparator) + "cache"
 		}
 	default:
-		// Default: use user home with .cache/zana
-		cacheDir = userHomeDir + string(os.PathSeparator) + ".cache" + string(os.PathSeparator) + "zana"
+		// Default: use user home with .cache/nvpm
+		cacheDir = userHomeDir + string(os.PathSeparator) + ".cache" + string(os.PathSeparator) + "nvpm"
 	}
 
 	return EnsureDirExists(cacheDir)
 }
 
 // GetRegistryCachePath returns the path to the registry cache file
-// e.g. /home/user/.cache/zana/registry-cache.json.zip
+// e.g. /home/user/.cache/nvpm/registry-cache.json.zip
 func GetRegistryCachePath() string {
 	return GetCachePath() + string(os.PathSeparator) + "registry-cache.json.zip"
 }
@@ -462,7 +462,7 @@ func DownloadWithCache(url string, cachePath string, maxAge time.Duration) error
 	return err
 }
 
-type zanaConfigFile struct {
+type nvpmConfigFile struct {
 	Registry struct {
 		URLs        []string `yaml:"urls"`
 		CacheMaxAge string   `yaml:"cacheMaxAge"`
@@ -505,32 +505,32 @@ func getConfigFilePath() string {
 	return GetAppDataPath() + string(os.PathSeparator) + "config.yaml"
 }
 
-func readZanaConfigFile() (zanaConfigFile, bool) {
+func readNvpmConfigFile() (nvpmConfigFile, bool) {
 	path := getConfigFilePath()
 	f, err := fileSystem.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
-		return zanaConfigFile{}, false
+		return nvpmConfigFile{}, false
 	}
 	defer func() { _ = fileSystem.Close(f) }()
 
 	b, err := io.ReadAll(f)
 	if err != nil {
-		return zanaConfigFile{}, true
+		return nvpmConfigFile{}, true
 	}
 
-	var cfg zanaConfigFile
+	var cfg nvpmConfigFile
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
-		return zanaConfigFile{}, true
+		return nvpmConfigFile{}, true
 	}
 	return cfg, true
 }
 
 func getRegistryCacheMaxAge() time.Duration {
 	// Default is intentionally short to reduce the chance of users seeing stale registry data
-	// without having to manually `zana sync registry`.
+	// without having to manually `nvpm sync registry`.
 	maxAge := 6 * time.Hour
 
-	if cfg, ok := readZanaConfigFile(); ok {
+	if cfg, ok := readNvpmConfigFile(); ok {
 		if raw := strings.TrimSpace(cfg.Registry.CacheMaxAge); raw != "" {
 			if parsed, err := time.ParseDuration(raw); err == nil {
 				if parsed < 0 {
@@ -545,7 +545,7 @@ func getRegistryCacheMaxAge() time.Duration {
 }
 
 func defaultRegistryURL() string {
-	return "https://github.com/mistweaverco/zana-registry/releases/latest/download/zana-registry.json.zip"
+	return "https://github.com/mistweaverco/nvpm-registry/releases/latest/download/nvpm-registry.json.zip"
 }
 
 func splitRegistryURLs(raw string) []string {
@@ -577,14 +577,14 @@ func splitRegistryURLs(raw string) []string {
 }
 
 // ResolveRegistryURLs returns registry URLs in priority order:
-// 1) ZANA_REGISTRY_URLS (comma/space-separated list)
+// 1) NVPM_REGISTRY_URLS (comma/space-separated list)
 // 2) config.yaml registry.urls (array)
 // 3) built-in default
 func ResolveRegistryURLs() []string {
-	if override := splitRegistryURLs(fileSystem.Getenv("ZANA_REGISTRY_URLS")); len(override) > 0 {
+	if override := splitRegistryURLs(fileSystem.Getenv("NVPM_REGISTRY_URLS")); len(override) > 0 {
 		return override
 	}
-	if cfg, ok := readZanaConfigFile(); ok {
+	if cfg, ok := readNvpmConfigFile(); ok {
 		if len(cfg.Registry.URLs) > 0 {
 			urls := make([]string, 0, len(cfg.Registry.URLs))
 			for _, u := range cfg.Registry.URLs {
@@ -810,7 +810,7 @@ func DownloadAndUnzipRegistry() error {
 		return fmt.Errorf("failed to download registry: %w", downloadErr)
 	}
 
-	// Unzip each registry and merge them into a single zana-registry.json for consumers.
+	// Unzip each registry and merge them into a single nvpm-registry.json for consumers.
 	registryJSONName := filepath.Base(GetAppRegistryFilePath())
 	registryJSONs := make([][]byte, 0, len(cachePaths))
 	for i, cachePath := range cachePaths {
@@ -852,7 +852,7 @@ func DownloadAndUnzipRegistry() error {
 }
 
 // DownloadAndUnzipRegistryForced is like DownloadAndUnzipRegistry, but always forces a fresh download.
-// It still respects registry URL resolution (ZANA_REGISTRY_URLS > config.yaml > default).
+// It still respects registry URL resolution (NVPM_REGISTRY_URLS > config.yaml > default).
 func DownloadAndUnzipRegistryForced() error {
 	registryURLs := ResolveRegistryURLs()
 	if len(registryURLs) == 0 {

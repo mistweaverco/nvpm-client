@@ -8,10 +8,10 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/mattn/go-isatty"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
-	"github.com/mistweaverco/zana-client/internal/lib/treesitterdeps"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/treesitterdeps"
 	"golang.org/x/mod/semver"
 )
 
@@ -55,7 +55,7 @@ func externalQueryRepoURLsEqual(a, b string) bool {
 	return normalizeExternalQueryRepoURL(a) == normalizeExternalQueryRepoURL(b)
 }
 
-// externalQueryLockPinFromLocalLock returns a pinned commit from zana-lock.json when the lock
+// externalQueryLockPinFromLocalLock returns a pinned commit from nvpm-lock.json when the lock
 // row matches this grammar package version and optional external query repo URL (reproducible sync).
 func externalQueryLockPinFromLocalLock(sourceID, version, lang, wantRepoURL string) (repoURL, ref string, ok bool) {
 	item := local_packages_parser.GetBySourceId(sourceID)
@@ -215,11 +215,11 @@ func SetExternalTreeSitterQueriesPolicy(s string) error {
 }
 
 // ConfigureExternalTreeSitterQueriesFromCLI applies the CLI flag when set; otherwise reads
-// ZANA_EXTERNAL_TREESITTER_QUERIES (ask | always | never).
+// NVPM_EXTERNAL_TREESITTER_QUERIES (ask | always | never).
 func ConfigureExternalTreeSitterQueriesFromCLI(flagExplicit bool, flagValue string) error {
 	val := strings.TrimSpace(flagValue)
 	if !flagExplicit {
-		if e := strings.TrimSpace(os.Getenv("ZANA_EXTERNAL_TREESITTER_QUERIES")); e != "" {
+		if e := strings.TrimSpace(os.Getenv("NVPM_EXTERNAL_TREESITTER_QUERIES")); e != "" {
 			val = e
 		}
 	}
@@ -326,7 +326,7 @@ func batchConfirmExternalTreeSitterQueries(sourceID string, needs []externalQuer
 	for _, n := range needs {
 		fmt.Fprintf(&b, "• language %q → %s\n", n.Lang, n.URL)
 	}
-	b.WriteString("\nAllow Zana to git clone these repositories on your machine?")
+	b.WriteString("\nAllow NVPM to git clone these repositories on your machine?")
 
 	title := "External tree-sitter query sources"
 	return externalTreeSitterQueriesConfirmHook(title, b.String())
@@ -335,7 +335,7 @@ func batchConfirmExternalTreeSitterQueries(sourceID string, needs []externalQuer
 func defaultExternalTreeSitterQueriesConfirm(title, description string) (bool, error) {
 	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stderr.Fd()) {
 		return false, fmt.Errorf(
-			"%s\n%s\n\nNon-interactive session: set ZANA_EXTERNAL_TREESITTER_QUERIES=always to allow these clones, or never to skip without prompting",
+			"%s\n%s\n\nNon-interactive session: set NVPM_EXTERNAL_TREESITTER_QUERIES=always to allow these clones, or never to skip without prompting",
 			title,
 			description,
 		)

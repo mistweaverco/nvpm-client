@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/mistweaverco/zana-client/internal/lib/version"
+	"github.com/mistweaverco/nvpm-client/internal/lib/version"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -7,10 +7,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 type OpamProvider struct {
@@ -275,7 +275,7 @@ func (p *OpamProvider) createWrappers() error {
 	if len(desired) == 0 {
 		return nil
 	}
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 	for _, pkg := range desired {
 		registryItem := parser.GetBySourceId(pkg.SourceID)
@@ -283,7 +283,7 @@ func (p *OpamProvider) createWrappers() error {
 			continue
 		}
 		for binName, binCmd := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := opamLstat(wrapperPath); err == nil {
 				_ = opamRemove(wrapperPath)
 			}
@@ -317,9 +317,9 @@ func (p *OpamProvider) createOpamWrapperForCommand(commandToExec string, wrapper
 	}
 
 	wrapperContent := fmt.Sprintf(`#!/bin/sh
-# Sets up OCaml/OPAM environment for zana-installed packages and runs the target command
+# Sets up OCaml/OPAM environment for nvpm-installed packages and runs the target command
 
-# Add the zana OPAM bin directory to PATH
+# Add the nvpm OPAM bin directory to PATH
 export PATH="%s:$PATH"
 
 # Set OPAM switch
@@ -338,7 +338,7 @@ exec %s "$@"
 // removeWrappersForPackage removes wrapper scripts for a specific package
 func (p *OpamProvider) removeWrappersForPackage(packageName string) error {
 	desired := lppOpamGetDataForProvider("opam").Packages
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 
 	for _, pkg := range desired {
@@ -347,7 +347,7 @@ func (p *OpamProvider) removeWrappersForPackage(packageName string) error {
 		}
 		registryItem := parser.GetBySourceId(pkg.SourceID)
 		for binName := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := opamLstat(wrapperPath); err == nil {
 				if err := opamRemove(wrapperPath); err != nil {
 					Logger.Info(fmt.Sprintf("OPAM: Warning removing wrapper %s: %v", wrapperPath, err))

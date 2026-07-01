@@ -10,9 +10,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 )
 
 type OpenVSXProvider struct {
@@ -277,7 +277,7 @@ func (p *OpenVSXProvider) downloadFile(url, destPath string) error {
 
 // createSymlinksFromRegistry creates symlinks based on registry bin configuration
 func (p *OpenVSXProvider) createSymlinksFromRegistry(publisher, extension, extractPath string, registryItem registry_parser.RegistryItem) error {
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 
 	for binName, binTemplate := range registryItem.Bin {
 		binPath := ResolveBinPath(binTemplate, nil, binName)
@@ -306,12 +306,12 @@ func (p *OpenVSXProvider) createSymlinksFromRegistry(publisher, extension, extra
 		}
 
 		// Create symlink
-		symlink := filepath.Join(zanaBinDir, binName)
+		symlink := filepath.Join(nvpmBinDir, binName)
 		if _, err := openvsxLstat(symlink); err == nil {
 			openvsxRemove(symlink)
 		}
 
-		relPath, err := filepath.Rel(zanaBinDir, execPath)
+		relPath, err := filepath.Rel(nvpmBinDir, execPath)
 		if err != nil {
 			relPath = execPath
 		}
@@ -349,16 +349,16 @@ func (p *OpenVSXProvider) findBinaryInDir(dir, name string) string {
 
 // removeSymlinks removes symlinks for a specific extension
 func (p *OpenVSXProvider) removeSymlinks(repo string) error {
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	extractPath := p.getExtensionPath(strings.Split(repo, "/")[0], strings.Split(repo, "/")[1])
 
-	entries, err := openvsxReadDir(zanaBinDir)
+	entries, err := openvsxReadDir(nvpmBinDir)
 	if err != nil {
 		return err
 	}
 
 	for _, entry := range entries {
-		symlink := filepath.Join(zanaBinDir, entry.Name())
+		symlink := filepath.Join(nvpmBinDir, entry.Name())
 		if link, err := openvsxLstat(symlink); err == nil {
 			if link.Mode()&os.ModeSymlink != 0 {
 				target, err := os.Readlink(symlink)
@@ -366,7 +366,7 @@ func (p *OpenVSXProvider) removeSymlinks(repo string) error {
 					continue
 				}
 				if !filepath.IsAbs(target) {
-					target = filepath.Join(zanaBinDir, target)
+					target = filepath.Join(nvpmBinDir, target)
 				}
 				if strings.HasPrefix(target, extractPath) {
 					if err := openvsxRemove(symlink); err != nil {

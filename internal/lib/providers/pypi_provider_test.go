@@ -8,19 +8,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/stretchr/testify/assert"
 )
 
-// helper to set ZANA_HOME to a temp dir
-func withTempZanaHome(t *testing.T) string {
+// helper to set NVPM_HOME to a temp dir
+func withTempNvpmHome(t *testing.T) string {
 	t.Helper()
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
-	t.Setenv("ZANA_HOME", t.TempDir())
-	t.Setenv("ZANA_CACHE", t.TempDir())
+	t.Setenv("NVPM_HOME", t.TempDir())
+	t.Setenv("NVPM_CACHE", t.TempDir())
 
 	// Most provider tests assume the toolchain is available and stub shell outs.
 	// In CI/dev environments where e.g. cargo isn't installed, make availability checks
@@ -47,7 +47,7 @@ func writeRegistry(t *testing.T, items []registry_parser.RegistryItem) {
 }
 
 func TestPyPiProviderBasicFlows(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 
 	// stub shell
 	oldOut := pipShellOut
@@ -144,7 +144,7 @@ func TestPyPiProviderBasicFlows(t *testing.T) {
 }
 
 func TestPyPiReadPackageInfo(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	// create a fake package dir with .dist-info and METADATA
 	base := filepath.Join(p.APP_PACKAGES_DIR, "site")
@@ -168,7 +168,7 @@ func fileInfoNow(t *testing.T) os.FileInfo {
 }
 
 func TestPyPiErrorBranches(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 
 	// readPackageInfo errors
@@ -187,7 +187,7 @@ func TestPyPiErrorBranches(t *testing.T) {
 	assert.Error(t, err)
 
 	// createWrappers with lstat/remove/chmod errors
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p = NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	_ = local_packages_parser.AddLocalPackage("pkg:pypi/black", "1.0.0")
@@ -237,7 +237,7 @@ func TestPyPiErrorBranches(t *testing.T) {
 }
 
 func TestMoreBranchesPyPI(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -320,7 +320,7 @@ func TestMoreBranchesPyPI(t *testing.T) {
 }
 
 func TestPyPiGetRepoEmptyAndCreateWrappersEarlyReturn(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	assert.Equal(t, "", p.getRepo("pkg:pypi"))
 	// No desired packages -> createWrappers should return nil quickly
@@ -328,7 +328,7 @@ func TestPyPiGetRepoEmptyAndCreateWrappersEarlyReturn(t *testing.T) {
 }
 
 func TestPyPiGenerateRequirements_WriteErrorAndCloseWarning(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// Add a desired PyPI package so found becomes true
@@ -353,7 +353,7 @@ func TestPyPiGenerateRequirements_WriteErrorAndCloseWarning(t *testing.T) {
 }
 
 func TestPyPiCreateWrappers_WrapperCreateErrorContinues(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired package with empty bin command to force wrapper creation error
@@ -368,7 +368,7 @@ func TestPyPiCreateWrappers_WrapperCreateErrorContinues(t *testing.T) {
 }
 
 func TestPyPiCreatePythonWrapper_StripsPypiPrefixFromRegistryBin(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	wrapper := filepath.Join(files.GetAppBinPath(), "yamllint")
@@ -381,7 +381,7 @@ func TestPyPiCreatePythonWrapper_StripsPypiPrefixFromRegistryBin(t *testing.T) {
 }
 
 func TestPyPiFindPackageInfoDir_ErrorAndContinues(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	// create lib/pythonX/site-packages
 	lib := filepath.Join(p.APP_PACKAGES_DIR, "lib", "python3.11", "site-packages")
@@ -407,7 +407,7 @@ func TestPyPiFindPackageInfoDir_ErrorAndContinues(t *testing.T) {
 }
 
 func TestPyPiParseEntryPoints_ErrorReturnsNil(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	// Directory without entry_points.txt -> pipReadFile will error
 	tmp := filepath.Join(p.APP_PACKAGES_DIR, "tmpinfo")
@@ -417,7 +417,7 @@ func TestPyPiParseEntryPoints_ErrorReturnsNil(t *testing.T) {
 }
 
 func TestPyPiSync_CreateDirErrorAndSkipInstalledInLoopAndFreezeError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	// 1) mkdir error
 	oldStat := pipStat
@@ -465,7 +465,7 @@ func TestPyPiSync_CreateDirErrorAndSkipInstalledInLoopAndFreezeError(t *testing.
 }
 
 func TestPyPiFindSitePackages_ReadDirErrorAndEmpty(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	// Mock getPythonVersion to fail so it uses fallback logic
 	oldGetPyVer := pipGetPythonVersion
@@ -487,7 +487,7 @@ func TestPyPiFindSitePackages_ReadDirErrorAndEmpty(t *testing.T) {
 }
 
 func TestPyPiSync_SkipBranchInLoop(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired c1 installed, c2 needs install
@@ -515,7 +515,7 @@ func TestPyPiSync_SkipBranchInLoop(t *testing.T) {
 }
 
 func TestPyPiGetLatestVersion_NoVersions(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	oldCap := pipShellOutCapture
 	pipShellOutCapture = func(string, []string, string, []string) (int, string, error) { return 0, "()", nil }
@@ -525,7 +525,7 @@ func TestPyPiGetLatestVersion_NoVersions(t *testing.T) {
 }
 
 func TestPyPiRemove_WrapperRemovalErrorAndLocalRemoveError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// Make removePackageWrappers return an error via lstat/remove injectables
@@ -558,7 +558,7 @@ func TestPyPiRemove_WrapperRemovalErrorAndLocalRemoveError(t *testing.T) {
 }
 
 func TestPyPiRemove_LocalRemoveErrorReturnsFalse(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// Registry and files so removeBin succeeds
@@ -582,7 +582,7 @@ func TestPyPiRemove_LocalRemoveErrorReturnsFalse(t *testing.T) {
 }
 
 func TestPyPiRemove_InvalidSourceAndRemoveBinFailure(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// invalid source id for removeBin
@@ -604,7 +604,7 @@ func TestPyPiRemove_InvalidSourceAndRemoveBinFailure(t *testing.T) {
 }
 
 func TestPyPiAreAllInstalledTrueTriggersWrappers(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired black==1.0.0
@@ -627,7 +627,7 @@ func TestPyPiAreAllInstalledTrueTriggersWrappers(t *testing.T) {
 }
 
 func TestPyPiMorePermutations(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -692,7 +692,7 @@ func TestPyPiMorePermutations(t *testing.T) {
 }
 
 func TestPyPiGenerateRequirementsCreateErrorAndRemoveWrappersNoBinAndRemoveBinSuccess(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -739,7 +739,7 @@ func TestPyPiGenerateRequirementsCreateErrorAndRemoveWrappersNoBinAndRemoveBinSu
 }
 
 func TestPyPiSyncMixedInstalledSkippedAndGuiScriptsAndRemoveHappy(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	_ = os.MkdirAll(files.GetAppBinPath(), 0755)
@@ -795,7 +795,7 @@ func TestPyPiSyncMixedInstalledSkippedAndGuiScriptsAndRemoveHappy(t *testing.T) 
 }
 
 func TestPyPiSyncReturnsEarlyWhenNoPackages(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	assert.True(t, p.Sync())

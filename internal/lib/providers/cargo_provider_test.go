@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -22,7 +22,7 @@ func (f fakeEntry) Type() os.FileMode          { return 0 }
 func (f fakeEntry) Info() (os.FileInfo, error) { return fileInfoNow(nil), nil }
 
 func TestMoreBranchesCargo(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -40,7 +40,7 @@ func TestMoreBranchesCargo(t *testing.T) {
 }
 
 func TestCargoLatestResolutionAndUninstallFail(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired with latest
@@ -73,7 +73,7 @@ func TestCargoLatestResolutionAndUninstallFail(t *testing.T) {
 }
 
 func TestCargoErrorBranches(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -98,7 +98,7 @@ func TestCargoErrorBranches(t *testing.T) {
 }
 
 func TestCargoSync_CreateDirErrorAndUnavailable(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	// mkdir error
 	oldStat, oldMkdir := cargoStat, cargoMkdir
@@ -116,7 +116,7 @@ func TestCargoSync_CreateDirErrorAndUnavailable(t *testing.T) {
 }
 
 func TestCargoSync_InstallErrorSetsAllOkFalse(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired crate not installed
@@ -133,7 +133,7 @@ func TestCargoSync_InstallErrorSetsAllOkFalse(t *testing.T) {
 }
 
 func TestCargoClean_RemoveAllErrorReturnsFalse(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// make removeAll fail
@@ -144,7 +144,7 @@ func TestCargoClean_RemoveAllErrorReturnsFalse(t *testing.T) {
 }
 
 func TestCargoCreateSymlinks_SkipDirAndRemovalSuccessAndSymlinkSuccess(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	// prepare cargo bin with a directory and a file
 	cbin := filepath.Join(p.APP_PACKAGES_DIR, "bin")
@@ -153,7 +153,7 @@ func TestCargoCreateSymlinks_SkipDirAndRemovalSuccessAndSymlinkSuccess(t *testin
 	// create a dummy binary file
 	bin := filepath.Join(cbin, "mybin")
 	_ = os.WriteFile(bin, []byte(""), 0755)
-	// ensure zana bin has an existing symlink to remove successfully
+	// ensure nvpm bin has an existing symlink to remove successfully
 	zbin := files.GetAppBinPath()
 	_ = os.MkdirAll(zbin, 0755)
 	sl := filepath.Join(zbin, "mybin")
@@ -167,7 +167,7 @@ func TestCargoCreateSymlinks_SkipDirAndRemovalSuccessAndSymlinkSuccess(t *testin
 }
 
 func TestCargoCreateSymlinks_ReadDirError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	cbin := filepath.Join(p.APP_PACKAGES_DIR, "bin")
 	_ = os.MkdirAll(cbin, 0755)
@@ -178,7 +178,7 @@ func TestCargoCreateSymlinks_ReadDirError(t *testing.T) {
 }
 
 func TestCargoCreateSymlinks_ChmodErrorAfterSymlinkSuccess(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	cbin := filepath.Join(p.APP_PACKAGES_DIR, "bin")
 	_ = os.MkdirAll(cbin, 0755)
@@ -197,14 +197,14 @@ func TestCargoCreateSymlinks_ChmodErrorAfterSymlinkSuccess(t *testing.T) {
 }
 
 func TestCargoCreateSymlinks_RemoveExistingSymlinkWarning(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	cbin := filepath.Join(p.APP_PACKAGES_DIR, "bin")
 	_ = os.MkdirAll(cbin, 0755)
 	// simulate cargo bin entries via injectable readDir
 	oldRD := cargoReadDir
 	cargoReadDir = func(string) ([]os.DirEntry, error) { return []os.DirEntry{fakeEntry{name: "warnbin", dir: false}}, nil }
-	// zana bin existing symlink to trigger removal warning
+	// nvpm bin existing symlink to trigger removal warning
 	zbin := files.GetAppBinPath()
 	_ = os.MkdirAll(zbin, 0755)
 	sl := filepath.Join(zbin, "warnbin")
@@ -226,17 +226,17 @@ func TestCargoCreateSymlinks_RemoveExistingSymlinkWarning(t *testing.T) {
 }
 
 func TestCargoCreateSymlinks_NoBinDirReturnsNil(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	// Do not create bin dir
 	assert.NoError(t, p.createSymlinks())
 }
 
 func TestCargoRemoveAllSymlinks_NonSymlinkAndReadlinkError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
-	// create a regular file in zana bin (non-symlink)
+	// create a regular file in nvpm bin (non-symlink)
 	zbin := files.GetAppBinPath()
 	_ = os.MkdirAll(zbin, 0755)
 	f := filepath.Join(zbin, "regular")
@@ -251,9 +251,9 @@ func TestCargoRemoveAllSymlinks_NonSymlinkAndReadlinkError(t *testing.T) {
 }
 
 func TestCargoRemoveAllSymlinks_RemoveWarning(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
-	// prepare cargo bin and zana bin symlink pointing into cargo bin
+	// prepare cargo bin and nvpm bin symlink pointing into cargo bin
 	cbin := filepath.Join(p.APP_PACKAGES_DIR, "bin")
 	_ = os.MkdirAll(cbin, 0755)
 	zbin := files.GetAppBinPath()
@@ -274,7 +274,7 @@ func TestCargoRemoveAllSymlinks_RemoveWarning(t *testing.T) {
 }
 
 func TestCargoSync_SkipInstalledWithLockUpdateWarningAndCreateSymlinksError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired latest
@@ -314,7 +314,7 @@ func TestCargoSync_SkipInstalledWithLockUpdateWarningAndCreateSymlinksError(t *t
 }
 
 func TestCargoSync_LatestResolutionErrorSetsAllOkFalse(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	_ = lppCargoAdd("pkg:cargo/tool", "latest")
@@ -333,7 +333,7 @@ func TestCargoSync_LatestResolutionErrorSetsAllOkFalse(t *testing.T) {
 }
 
 func TestCargoSync_CreateSymlinksErrorLoggedWhenNoDesired(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	oldHas := cargoHasCommand
@@ -355,7 +355,7 @@ func TestCargoSync_CreateSymlinksErrorLoggedWhenNoDesired(t *testing.T) {
 }
 
 func TestCargoInstall_LatestResolveErrorReturnsFalse(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	oldCap := cargoShellOutCapture
@@ -365,7 +365,7 @@ func TestCargoInstall_LatestResolveErrorReturnsFalse(t *testing.T) {
 }
 
 func TestCargoRemove_RemoveAllSymlinksErrorLogs(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	oldOut := cargoShellOut
@@ -392,7 +392,7 @@ func TestCargoRemove_RemoveAllSymlinksErrorLogs(t *testing.T) {
 }
 
 func TestCargoSync_InstallLatestSuccess(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	_ = lppCargoAdd("pkg:cargo/tool", "latest")
@@ -421,7 +421,7 @@ func TestCargoSync_InstallLatestSuccess(t *testing.T) {
 }
 
 func TestCargoSync_InstallLatestLockUpdateWarning(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired latest so pkg.Version != desiredVersion after resolution
@@ -458,7 +458,7 @@ func TestCargoSync_InstallLatestLockUpdateWarning(t *testing.T) {
 }
 
 func TestCargoInstall_SpecificVersionSuccess(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	oldAdd := lppCargoAdd
@@ -476,7 +476,7 @@ func TestCargoInstall_SpecificVersionSuccess(t *testing.T) {
 }
 
 func TestCargoRemove_LocalRemoveError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	oldOut := cargoShellOut
@@ -489,7 +489,7 @@ func TestCargoRemove_LocalRemoveError(t *testing.T) {
 }
 
 func TestCargoInstall_InvalidAndLatestAddError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// invalid source id
@@ -505,7 +505,7 @@ func TestCargoInstall_InvalidAndLatestAddError(t *testing.T) {
 }
 
 func TestCargoRemove_InvalidAndCreateSymlinksError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// invalid source id
@@ -542,7 +542,7 @@ func TestCargoRemove_InvalidAndCreateSymlinksError(t *testing.T) {
 }
 
 func TestCargoRemove_UninstallErrorProceeds(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	oldOut := cargoShellOut
@@ -568,7 +568,7 @@ func TestCargoRemove_UninstallErrorProceeds(t *testing.T) {
 }
 
 func TestCargoSync_SkipInvalidRepoEntryAndSpecificInstallSuccess(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// add invalid and valid entries
@@ -597,7 +597,7 @@ func TestCargoSync_SkipInvalidRepoEntryAndSpecificInstallSuccess(t *testing.T) {
 }
 
 func TestCargoInstall_EmptyVersionResolvesLatestSuccess(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	oldCap := cargoShellOutCapture
@@ -621,7 +621,7 @@ func TestCargoInstall_EmptyVersionResolvesLatestSuccess(t *testing.T) {
 }
 
 func TestCargoMorePermutations(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -649,7 +649,7 @@ func TestCargoMorePermutations(t *testing.T) {
 }
 
 func TestCargoRepoAndCreateSymlinksSuccessAndCleanHappyAndInvalidUpdateRemove(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -677,7 +677,7 @@ func TestCargoRepoAndCreateSymlinksSuccessAndCleanHappyAndInvalidUpdateRemove(t 
 }
 
 func TestCargoRemoveAllSymlinksReadDirErrorAndCreateSymlinksNoBinDir(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	// readDir error -> propagate
 	oldRD := cargoReadDir
@@ -690,7 +690,7 @@ func TestCargoRemoveAllSymlinksReadDirErrorAndCreateSymlinksNoBinDir(t *testing.
 }
 
 func TestCargoCleanWithRemoveAllSymlinksErrorStillProceeds(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// force removeAllSymlinks to error
@@ -715,7 +715,7 @@ func TestCargoCleanWithRemoveAllSymlinksErrorStillProceeds(t *testing.T) {
 }
 
 func TestCargoSyncMixedDesiredInstalledAndRemoveAllSymlinksSuccessAndWarning(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderCargo()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired alpha fixed, beta latest
@@ -777,7 +777,7 @@ func TestCargoSyncMixedDesiredInstalledAndRemoveAllSymlinksSuccessAndWarning(t *
 }
 
 func TestCargoRemoveAllSymlinksHandlesErrors(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	// Cargo: removeAllSymlinks handles Lstat err via fake readDir; and Remove error when target under cargo
 	cp := NewProviderCargo()
 	_ = os.MkdirAll(cp.APP_PACKAGES_DIR, 0755)
@@ -790,7 +790,7 @@ func TestCargoRemoveAllSymlinksHandlesErrors(t *testing.T) {
 	assert.NoError(t, cp.removeAllSymlinks())
 	// simulate symlink pointing into cargo and remove failing
 	cargoReadDir = oldRD
-	// create cargo bin and a symlink to it under zana bin
+	// create cargo bin and a symlink to it under nvpm bin
 	cbin := filepath.Join(cp.APP_PACKAGES_DIR, "bin")
 	_ = os.MkdirAll(cbin, 0755)
 	zbin := files.GetAppBinPath()
@@ -803,7 +803,7 @@ func TestCargoRemoveAllSymlinksHandlesErrors(t *testing.T) {
 	cargoLstat, cargoReadlink, cargoRemove = oldLs, oldRl, oldRm
 }
 func TestCargoProviderBasicFlows(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 
 	oldOut := cargoShellOut
 	oldCap := cargoShellOutCapture
@@ -833,7 +833,7 @@ func TestCargoProviderBasicFlows(t *testing.T) {
 	_ = os.MkdirAll(cargoBin, 0755)
 	assert.NoError(t, os.WriteFile(filepath.Join(cargoBin, "mycrate"), []byte(""), 0755))
 
-	// create a symlink in zana bin that points to cargo bin for removeAllSymlinks
+	// create a symlink in nvpm bin that points to cargo bin for removeAllSymlinks
 	zbin := files.GetAppBinPath()
 	sl := filepath.Join(zbin, "mycrate")
 	_ = os.Symlink(filepath.Join(cargoBin, "mycrate"), sl)

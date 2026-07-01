@@ -4,12 +4,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 	"gopkg.in/yaml.v3"
 )
 
 // FileConfig represents the optional user config.yaml file.
-// It lives next to zana-lock.json in the Zana config directory.
+// It lives next to nvpm-lock.json in the NVPM config directory.
 type FileConfig struct {
 	Registry struct {
 		URLs        []string `yaml:"urls"`

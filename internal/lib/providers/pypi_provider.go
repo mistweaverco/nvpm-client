@@ -7,10 +7,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
 type PyPiProvider struct {
@@ -183,12 +183,12 @@ func (p *PyPiProvider) readPackageInfo(packagePath string) (*PackageInfo, error)
 
 // createWrappers creates wrapper scripts for Python package scripts
 func (p *PyPiProvider) createWrappers() error {
-	// Create wrappers based on zana-registry.json bin attribute
+	// Create wrappers based on nvpm-registry.json bin attribute
 	desired := lppPyGetDataForProvider("pypi").Packages
 	if len(desired) == 0 {
 		return nil
 	}
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 	for _, pkg := range desired {
 		registryItem := parser.GetBySourceId(pkg.SourceID)
@@ -196,7 +196,7 @@ func (p *PyPiProvider) createWrappers() error {
 			continue
 		}
 		for binName, binCmd := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			// Remove any existing wrapper with the same name to avoid conflicts
 			if _, err := pipLstat(wrapperPath); err == nil {
 				_ = pipRemove(wrapperPath)
@@ -234,9 +234,9 @@ func (p *PyPiProvider) createPythonWrapperForCommand(commandToExec string, wrapp
 		return fmt.Errorf("empty command for wrapper %s", wrapperPath)
 	}
 	wrapperContent := fmt.Sprintf(`#!/bin/sh
-# Sets up Python environment for zana-installed packages and runs the target command
+# Sets up Python environment for nvpm-installed packages and runs the target command
 
-# Add the zana Python packages to PYTHONPATH and PATH (to resolve console scripts)
+# Add the nvpm Python packages to PYTHONPATH and PATH (to resolve console scripts)
 export PYTHONPATH="%s:$PYTHONPATH"
 export PATH="%s:$PATH"
 
@@ -296,19 +296,19 @@ func (p *PyPiProvider) findSitePackagesDir() string {
 	return ""
 }
 
-// removeAllWrappers removes all wrapper scripts from the zana bin directory
+// removeAllWrappers removes all wrapper scripts from the nvpm bin directory
 func (p *PyPiProvider) removeAllWrappers() error {
 	// Remove only wrappers managed by the PyPI provider based on registry bin names
 	desired := lppPyGetDataForProvider("pypi").Packages
 	if len(desired) == 0 {
 		return nil
 	}
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	parser := registry_parser.NewDefaultRegistryParser()
 	for _, pkg := range desired {
 		registryItem := parser.GetBySourceId(pkg.SourceID)
 		for binName := range registryItem.Bin {
-			wrapperPath := filepath.Join(zanaBinDir, binName)
+			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := pipLstat(wrapperPath); err == nil {
 				if err := pipRemove(wrapperPath); err != nil {
 					Logger.Error(fmt.Sprintf("Warning: failed to remove wrapper script %s: %v", wrapperPath, err))
@@ -321,7 +321,7 @@ func (p *PyPiProvider) removeAllWrappers() error {
 
 // removePackageWrappers removes wrapper scripts for a specific package
 func (p *PyPiProvider) removePackageWrappers(packageName string) error {
-	zanaBinDir := files.GetAppBinPath()
+	nvpmBinDir := files.GetAppBinPath()
 	// Reconstruct sourceId to query registry (use new format)
 	sourceID := p.PREFIX + packageName
 	parser := registry_parser.NewDefaultRegistryParser()
@@ -330,7 +330,7 @@ func (p *PyPiProvider) removePackageWrappers(packageName string) error {
 		return nil
 	}
 	for binName := range registryItem.Bin {
-		wrapperPath := filepath.Join(zanaBinDir, binName)
+		wrapperPath := filepath.Join(nvpmBinDir, binName)
 		if _, err := pipLstat(wrapperPath); err == nil {
 			if err := pipRemove(wrapperPath); err != nil {
 				Logger.Error(fmt.Sprintf("Warning: failed to remove wrapper script %s: %v", wrapperPath, err))

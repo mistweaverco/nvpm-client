@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 )
 
 // DetectRegistryTarget detects the current platform and returns the registry target string

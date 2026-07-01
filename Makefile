@@ -1,4 +1,4 @@
-BIN_NAME=zana
+BIN_NAME=nvpm
 
 build:
 	./scripts/build.sh

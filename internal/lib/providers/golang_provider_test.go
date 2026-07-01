@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGolangGeneratePackageJSON_CloseWarningAndEncodeError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -42,7 +42,7 @@ func TestGolangGeneratePackageJSON_CloseWarningAndEncodeError(t *testing.T) {
 }
 
 func TestGolangCreateSymlink_RemovesExistingAndSymlinkError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -58,7 +58,7 @@ func TestGolangCreateSymlink_RemovesExistingAndSymlinkError(t *testing.T) {
 	_ = os.MkdirAll(gobin, 0755)
 	assert.NoError(t, os.WriteFile(filepath.Join(gobin, "tool"), []byte(""), 0755))
 
-	// Prepare an existing symlink in zana bin to exercise removal path
+	// Prepare an existing symlink in nvpm bin to exercise removal path
 	zbin := files.GetAppBinPath()
 	_ = os.MkdirAll(zbin, 0755)
 	pre := filepath.Join(zbin, "tool")
@@ -84,7 +84,7 @@ func TestGolangCreateSymlink_RemovesExistingAndSymlinkError(t *testing.T) {
 }
 
 func TestGolangRemoveBin_ErrorOnRemove(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -109,7 +109,7 @@ func TestGolangRemoveBin_ErrorOnRemove(t *testing.T) {
 }
 
 func TestGolangClean_BinaryRemoveErrorAndLocalRemoveError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -142,7 +142,7 @@ func TestGolangClean_BinaryRemoveErrorAndLocalRemoveError(t *testing.T) {
 }
 
 func TestGolangSync_DirMkdirErrorAndModInitError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 
 	// 1) Directory creation error
@@ -180,7 +180,7 @@ func TestGolangSync_DirMkdirErrorAndModInitError(t *testing.T) {
 }
 
 func TestGolangInstall_LatestFetchError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -192,11 +192,11 @@ func TestGolangInstall_LatestFetchError(t *testing.T) {
 }
 
 func TestGolangSync_InstallErrorSetsAllOkFalse(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// ensure go.mod exists to skip mod init
-	assert.NoError(t, os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "go.mod"), []byte("module zana"), 0644))
+	assert.NoError(t, os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "go.mod"), []byte("module nvpm"), 0644))
 	// add desired package
 	_ = lppGoAdd("pkg:golang/github.com/acme/tool", "v1.0.0")
 	// stub goShellOut: go available ok, install fails
@@ -215,7 +215,7 @@ func TestGolangSync_InstallErrorSetsAllOkFalse(t *testing.T) {
 	assert.False(t, p.Sync())
 }
 func TestGolangErrorBranches(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	// registry item with no bin
 	writeRegistry(t, []registry_parser.RegistryItem{{
@@ -244,7 +244,7 @@ func TestGolangErrorBranches(t *testing.T) {
 }
 
 func TestMoreBranchesGolang(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -291,7 +291,7 @@ func TestMoreBranchesGolang(t *testing.T) {
 }
 
 func TestGolangSyncInstallSuccess(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired package
@@ -316,7 +316,7 @@ func TestGolangSyncInstallSuccess(t *testing.T) {
 }
 
 func TestGolangMorePermutations(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -349,7 +349,7 @@ func TestGolangMorePermutations(t *testing.T) {
 }
 
 func TestGolangCreateSymlinkSuccessAndGeneratePackageJSONCreateErrorAndUpdateInvalid(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -363,7 +363,7 @@ func TestGolangCreateSymlinkSuccessAndGeneratePackageJSONCreateErrorAndUpdateInv
 	_ = os.MkdirAll(gobin, 0755)
 	assert.NoError(t, os.WriteFile(filepath.Join(gobin, "tool"), []byte(""), 0755))
 	assert.NoError(t, p.createSymlink("pkg:golang/tool"))
-	// symlink exists in zana bin
+	// symlink exists in nvpm bin
 	_, err := os.Lstat(filepath.Join(files.GetAppBinPath(), "tool"))
 	assert.NoError(t, err)
 
@@ -378,7 +378,7 @@ func TestGolangCreateSymlinkSuccessAndGeneratePackageJSONCreateErrorAndUpdateInv
 }
 
 func TestGolangCleanMultipleAndInstallLatestSuccess(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderGolang()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// add two packages
@@ -416,7 +416,7 @@ func TestGolangCleanMultipleAndInstallLatestSuccess(t *testing.T) {
 	goShellOutCapture = oldCap
 }
 func TestGolangProviderBasicFlows(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 
 	oldOut := goShellOut
 	oldCap := goShellOutCapture

@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
-	"github.com/mistweaverco/zana-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 )
 
 // GitHubTreeSitterUsesPhasedInteractiveInstall is true when this install should split into

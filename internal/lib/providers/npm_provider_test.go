@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mistweaverco/zana-client/internal/lib/files"
-	"github.com/mistweaverco/zana-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNPMErrorBranches(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -108,7 +108,7 @@ func TestNPMErrorBranches(t *testing.T) {
 }
 
 func TestPushingRemainingBranchesTo100(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 
 	// NPM: Sync fast path (lock newer, all installed, no changes) and needsUpdate path with ci success
 	np := NewProviderNPM()
@@ -170,7 +170,7 @@ func TestPushingRemainingBranchesTo100(t *testing.T) {
 }
 
 func TestMoreBranchesNPM(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -195,7 +195,7 @@ func TestMoreBranchesNPM(t *testing.T) {
 }
 
 func TestNPMNeedsUpdateCiFailThenInstallIndividually(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired v2.0.0
@@ -230,7 +230,7 @@ func TestNPMNeedsUpdateCiFailThenInstallIndividually(t *testing.T) {
 }
 
 func TestNPMAllConditionalsToggle(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -284,7 +284,7 @@ func TestNPMAllConditionalsToggle(t *testing.T) {
 }
 
 func TestNPMGeneratePackageJSONSkipsNonNpmAndCloseErrorAndEncodeError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -329,7 +329,7 @@ func TestNPMGeneratePackageJSONSkipsNonNpmAndCloseErrorAndEncodeError(t *testing
 }
 
 func TestNPMRemoveAllSymlinksWarnOnRemove(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(files.GetAppBinPath(), 0755)
 	// create a dummy entry in bin
@@ -343,7 +343,7 @@ func TestNPMRemoveAllSymlinksWarnOnRemove(t *testing.T) {
 }
 
 func TestNPMCleanLogsErrorOnRemoveSymlinks(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	oldRD, oldRA, oldStat, oldMkdir, oldGet := npmReadDir, npmRemoveAll, npmStat, npmMkdir, lppGetData
@@ -363,7 +363,7 @@ func TestNPMCleanLogsErrorOnRemoveSymlinks(t *testing.T) {
 }
 
 func TestNPMSyncCreateDirError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	oldStat, oldMkdir := npmStat, npmMkdir
 	npmStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
@@ -373,7 +373,7 @@ func TestNPMSyncCreateDirError(t *testing.T) {
 }
 
 func TestNPMFastPathLogsCreateSymlinkErrors(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired a@1.0.0
@@ -396,7 +396,7 @@ func TestNPMFastPathLogsCreateSymlinkErrors(t *testing.T) {
 }
 
 func TestNPMInstallAndRemovePermutations(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -464,7 +464,7 @@ func TestNPMInstallAndRemovePermutations(t *testing.T) {
 }
 
 func TestGetRepoAllProviders(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 
 	np := NewProviderNPM()
 	assert.Equal(t, "pkg", np.getRepo("pkg:npm/pkg"))
@@ -487,7 +487,7 @@ func TestGetRepoAllProviders(t *testing.T) {
 }
 
 func TestNPMGeneratePackageJSONCreateErrorAndCleanHappy(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -517,7 +517,7 @@ func TestNPMGeneratePackageJSONCreateErrorAndCleanHappy(t *testing.T) {
 }
 
 func TestNPMFastPathMultiPackageSymlinkLoop(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
@@ -543,7 +543,7 @@ func TestNPMFastPathMultiPackageSymlinkLoop(t *testing.T) {
 }
 
 func TestNPMFastPathMultiPackageSymlinkLoopWithSymlinkErrors(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	_ = lppAdd("pkg:npm/a", "1.0.0")
@@ -566,7 +566,7 @@ func TestNPMFastPathMultiPackageSymlinkLoopWithSymlinkErrors(t *testing.T) {
 }
 
 func TestNPMFastPathMultiPackageSymlinkLoopSuccess(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	_ = lppAdd("pkg:npm/a", "1.0.0")
@@ -589,7 +589,7 @@ func TestNPMFastPathMultiPackageSymlinkLoopSuccess(t *testing.T) {
 }
 
 func TestNPMFastPathSecondLoopAllInstalled(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired
@@ -637,7 +637,7 @@ func TestNPMFastPathSecondLoopAllInstalled(t *testing.T) {
 }
 
 func TestNPMFastPathAllInstalledCallsSymlinkForEachPackage(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired packages
@@ -679,7 +679,7 @@ func TestNPMFastPathAllInstalledCallsSymlinkForEachPackage(t *testing.T) {
 }
 
 func TestNPMFastPathAllInstalledMixedSymlinkSuccessAndError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired packages
@@ -709,7 +709,7 @@ func TestNPMFastPathAllInstalledMixedSymlinkSuccessAndError(t *testing.T) {
 }
 
 func TestNPMUpdateLatestFetchFail(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	oldCap := npmShellOutCapture
 	npmShellOutCapture = func(string, []string, string, []string) (int, string, error) { return 1, "", errors.New("err") }
@@ -718,7 +718,7 @@ func TestNPMUpdateLatestFetchFail(t *testing.T) {
 }
 
 func TestNPMSkipPathSymlinkError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	_ = lppAdd("pkg:npm/a", "1.0.0")
@@ -734,7 +734,7 @@ func TestNPMSkipPathSymlinkError(t *testing.T) {
 }
 
 func TestNPMInstallPostSyncSymlinkError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// Ensure Sync will return true quickly by faking no packages
@@ -753,7 +753,7 @@ func TestNPMInstallPostSyncSymlinkError(t *testing.T) {
 }
 
 func TestNPMRemoveLogsSymlinkRemovalError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// Prepare node_modules/pkg with a bin so removePackageSymlinks will try to remove
@@ -775,7 +775,7 @@ func TestNPMRemoveLogsSymlinkRemovalError(t *testing.T) {
 }
 
 func TestNPMInstallIndividualPathSymlinkError(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	// desired d@1.0.0 not installed
@@ -789,7 +789,7 @@ func TestNPMInstallIndividualPathSymlinkError(t *testing.T) {
 }
 
 func TestNPMProviderBasicFlows(t *testing.T) {
-	_ = withTempZanaHome(t)
+	_ = withTempNvpmHome(t)
 
 	// stub shell helpers
 	oldOut := npmShellOut

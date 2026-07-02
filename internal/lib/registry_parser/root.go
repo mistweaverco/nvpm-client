@@ -28,6 +28,7 @@ type RegistryParser struct {
 	fileReader FileReader
 	data       RegistryRoot
 	hasData    bool
+	bySourceID map[string]RegistryItem
 }
 
 // NewRegistryParser creates a new RegistryParser instance
@@ -273,6 +274,8 @@ func (rp *RegistryParser) GetData(force bool) RegistryRoot {
 		return rp.data
 	}
 
+	rp.bySourceID = nil
+
 	// Try to load from the default registry file path
 	// This maintains backward compatibility with the old implementation
 	registryFile := files.GetAppRegistryFilePath()
@@ -280,15 +283,36 @@ func (rp *RegistryParser) GetData(force bool) RegistryRoot {
 		// If file loading fails, return empty data
 		rp.data = RegistryRoot{}
 		rp.hasData = true
+		rp.rebuildSourceIDIndex()
 	}
 
 	return rp.data
+}
+
+func (rp *RegistryParser) rebuildSourceIDIndex() {
+	if len(rp.data) == 0 {
+		rp.bySourceID = map[string]RegistryItem{}
+		return
+	}
+	rp.bySourceID = make(map[string]RegistryItem, len(rp.data))
+	for _, item := range rp.data {
+		id := normalizeSourceID(strings.TrimSpace(item.Source.ID))
+		if id == "" {
+			continue
+		}
+		rp.bySourceID[id] = item
+	}
 }
 
 // GetBySourceId finds a registry item by its source ID
 func (rp *RegistryParser) GetBySourceId(sourceId string) RegistryItem {
 	registryRoot := rp.GetData(false)
 	want := normalizeSourceID(sourceId)
+	if rp.bySourceID != nil {
+		if item, ok := rp.bySourceID[want]; ok {
+			return item
+		}
+	}
 	for _, item := range registryRoot {
 		if item.Source.ID == sourceId || normalizeSourceID(item.Source.ID) == want {
 			return item
@@ -349,6 +373,7 @@ func (rp *RegistryParser) LoadFromBytes(data []byte) error {
 
 	rp.data = registry
 	rp.hasData = true
+	rp.rebuildSourceIDIndex()
 	return nil
 }
 

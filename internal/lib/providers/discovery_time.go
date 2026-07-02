@@ -11,7 +11,8 @@ import (
 )
 
 type discoveryDB struct {
-	// Key format: "<sourceId>@<version>"
+	// Key format: "<sourceId>@<version>" where version is a registry semver for immutable
+	// providers, or "tag+commit" / "commit" for git-hosted packages.
 	FirstSeenUnix map[string]int64 `json:"first_seen_unix"`
 }
 
@@ -73,6 +74,10 @@ func discoveryKey(sourceID, version string) string {
 type DiscoveryPair struct {
 	SourceID string
 	Version  string
+	// Commit is the resolved git commit SHA when SourceID is git-hosted. Required for
+	// batch recording; list commands pass it from the lockfile. Install/update resolves
+	// commits via git ls-remote in discoveryVersionForEnforcement.
+	Commit string
 }
 
 func RecordDiscovery(sourceID, version string) error {
@@ -91,8 +96,12 @@ func RecordDiscoveryBatch(pairs []DiscoveryPair) error {
 	}
 	changed := false
 	for _, p := range pairs {
-		id := p.SourceID
-		ver := p.Version
+		enriched, err := enrichDiscoveryPair(p)
+		if err != nil {
+			continue
+		}
+		id := enriched.SourceID
+		ver := enriched.Version
 		if id == "" || ver == "" || ver == "latest" {
 			continue
 		}

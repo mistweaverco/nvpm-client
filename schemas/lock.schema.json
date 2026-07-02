@@ -27,6 +27,11 @@
             "minLength": 1,
             "description": "Exact version/tag that was installed."
           },
+          "commit": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Resolved full git commit SHA for git-hosted packages (github, gitlab, codeberg)."
+          },
           "extras": {
             "type": "object",
             "description": "Optional extension point for per-package metadata.",

@@ -573,7 +573,7 @@ func TestDownloadAndUnzipRegistry(t *testing.T) {
 		defer ResetDependencies()
 
 		// Test the function
-		err := DownloadAndUnzipRegistry()
+		_, err := DownloadAndUnzipRegistry()
 		// This will fail due to mock implementation, but we're testing the function structure
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to unzip registry")
@@ -618,7 +618,8 @@ func TestDownloadAndUnzipRegistry(t *testing.T) {
 		})
 		defer ResetDependencies()
 
-		require.NoError(t, DownloadAndUnzipRegistry())
+		_, err := DownloadAndUnzipRegistry()
+		require.NoError(t, err)
 
 		mergedBytes, err := afero.ReadFile(mockFS.fs, GetAppRegistryFilePath())
 		require.NoError(t, err)
@@ -1677,7 +1678,7 @@ func TestDownloadAndUnzipRegistryErrorPaths(t *testing.T) {
 		defer ResetDependencies()
 
 		// Test that it fails due to download error
-		err := DownloadAndUnzipRegistry()
+		_, err := DownloadAndUnzipRegistry()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to download registry")
 	})
@@ -1711,7 +1712,7 @@ func TestDownloadAndUnzipRegistryErrorPaths(t *testing.T) {
 		defer ResetDependencies()
 
 		// Test that it fails due to unzip error
-		err := DownloadAndUnzipRegistry()
+		_, err := DownloadAndUnzipRegistry()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to unzip registry")
 	})
@@ -1741,7 +1742,7 @@ func TestDownloadAndUnzipRegistryErrorPaths(t *testing.T) {
 		defer ResetDependencies()
 
 		// Test that it uses the custom URL and fails due to download error
-		err := DownloadAndUnzipRegistry()
+		_, err := DownloadAndUnzipRegistry()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to download registry")
 	})
@@ -1792,7 +1793,7 @@ func TestDownloadAndUnzipRegistryErrorPaths(t *testing.T) {
 		SetHTTPClient(mockClient)
 		defer ResetDependencies()
 
-		err = DownloadAndUnzipRegistry()
+		_, err = DownloadAndUnzipRegistry()
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to unzip registry")
 		assert.True(t, called, "expected unzip to be called when cache is newer than JSON")
@@ -2455,7 +2456,7 @@ func TestAdditionalEdgeCases(t *testing.T) {
 		defer ResetDependencies()
 
 		// Test the full workflow - should succeed
-		err := DownloadAndUnzipRegistry()
+		_, err := DownloadAndUnzipRegistry()
 		assert.NoError(t, err)
 	})
 
@@ -2748,7 +2749,7 @@ func TestUncoveredBranches(t *testing.T) {
 		defer ResetDependencies()
 
 		// Test the full workflow - should succeed
-		err := DownloadAndUnzipRegistry()
+		_, err := DownloadAndUnzipRegistry()
 		assert.NoError(t, err)
 	})
 

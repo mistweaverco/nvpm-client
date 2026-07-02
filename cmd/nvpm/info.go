@@ -30,7 +30,7 @@ Examples:
 	ValidArgsFunction: packageIDCompletion,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Ensure registry is available
-		_ = downloadAndUnzipRegistryFn()
+		_, _ = downloadAndUnzipRegistryFn()
 
 		parser := newRegistryParser()
 

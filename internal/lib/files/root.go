@@ -749,18 +749,20 @@ func mergeRegistryJSONArrays(registryJSONs [][]byte) ([]byte, error) {
 }
 
 // DownloadAndUnzipRegistry downloads the registry from the default URL and unzips it
-// This is used to ensure the registry is available for commands that need it
-func DownloadAndUnzipRegistry() error {
+// This is used to ensure the registry is available for commands that need it.
+// The returned bool is true when the local registry snapshot was rebuilt (cache expired
+// or merged JSON was stale); false when an existing on-disk registry was reused.
+func DownloadAndUnzipRegistry() (bool, error) {
 	return downloadAndUnzipRegistry(getRegistryCacheMaxAge(), true)
 }
 
 // DownloadAndUnzipRegistryQuiet is like DownloadAndUnzipRegistry but does not show its own
 // download spinner. Use this when the caller already wraps the operation in a spinner.
-func DownloadAndUnzipRegistryQuiet() error {
+func DownloadAndUnzipRegistryQuiet() (bool, error) {
 	return downloadAndUnzipRegistry(getRegistryCacheMaxAge(), false)
 }
 
-func downloadAndUnzipRegistry(cacheMaxAge time.Duration, showSpinner bool) error {
+func downloadAndUnzipRegistry(cacheMaxAge time.Duration, showSpinner bool) (bool, error) {
 	registryURLs := ResolveRegistryURLs()
 	registryJSONPath := GetAppRegistryFilePath()
 
@@ -794,7 +796,7 @@ func downloadAndUnzipRegistry(cacheMaxAge time.Duration, showSpinner bool) error
 				}
 			}
 			if isNewerThanAll {
-				return nil
+				return false, nil
 			}
 		}
 	}
@@ -814,14 +816,14 @@ func downloadAndUnzipRegistry(cacheMaxAge time.Duration, showSpinner bool) error
 	if needsDownload {
 		if showSpinner {
 			if err := spinnerutil.Run("Downloading registry...", action); err != nil {
-				return err
+				return false, err
 			}
 		} else {
 			action()
 		}
 
 		if downloadErr != nil {
-			return fmt.Errorf("failed to download registry: %w", downloadErr)
+			return false, fmt.Errorf("failed to download registry: %w", downloadErr)
 		}
 	}
 
@@ -831,44 +833,44 @@ func downloadAndUnzipRegistry(cacheMaxAge time.Duration, showSpinner bool) error
 	for i, cachePath := range cachePaths {
 		unzipDir := filepath.Join(GetCachePath(), fmt.Sprintf("registry-unzipped-%d", i))
 		if err := Unzip(cachePath, unzipDir); err != nil {
-			return fmt.Errorf("failed to unzip registry: %w", err)
+			return false, fmt.Errorf("failed to unzip registry: %w", err)
 		}
 
 		f, err := fileSystem.OpenFile(filepath.Join(unzipDir, registryJSONName), os.O_RDONLY, 0)
 		if err != nil {
-			return fmt.Errorf("failed to read registry json: %w", err)
+			return false, fmt.Errorf("failed to read registry json: %w", err)
 		}
 		b, err := io.ReadAll(f)
 		_ = fileSystem.Close(f)
 		if err != nil {
-			return fmt.Errorf("failed to read registry json: %w", err)
+			return false, fmt.Errorf("failed to read registry json: %w", err)
 		}
 		registryJSONs = append(registryJSONs, b)
 	}
 
 	merged, err := mergeRegistryJSONArrays(registryJSONs)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	out, err := fileSystem.Create(registryJSONPath)
 	if err != nil {
-		return fmt.Errorf("failed to write merged registry json: %w", err)
+		return false, fmt.Errorf("failed to write merged registry json: %w", err)
 	}
 	if _, err := out.Write(merged); err != nil {
 		_ = fileSystem.Close(out)
-		return fmt.Errorf("failed to write merged registry json: %w", err)
+		return false, fmt.Errorf("failed to write merged registry json: %w", err)
 	}
 	if err := fileSystem.Close(out); err != nil {
-		return fmt.Errorf("failed to write merged registry json: %w", err)
+		return false, fmt.Errorf("failed to write merged registry json: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
 // DownloadAndUnzipRegistryForced is like DownloadAndUnzipRegistry, but always forces a fresh download.
 // It still respects registry URL resolution (NVPM_REGISTRY_URLS > config.yaml > default).
-func DownloadAndUnzipRegistryForced() error {
+func DownloadAndUnzipRegistryForced() (bool, error) {
 	registryURLs := ResolveRegistryURLs()
 	if len(registryURLs) == 0 {
 		registryURLs = []string{defaultRegistryURL()}
@@ -887,11 +889,11 @@ func DownloadAndUnzipRegistryForced() error {
 	}
 
 	if err := spinnerutil.Run("Downloading registry...", action); err != nil {
-		return err
+		return false, err
 	}
 
 	if downloadErr != nil {
-		return fmt.Errorf("failed to download registry: %w", downloadErr)
+		return false, fmt.Errorf("failed to download registry: %w", downloadErr)
 	}
 
 	// Reuse the non-forced merge/unzip path now that zips are fresh.

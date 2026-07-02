@@ -71,18 +71,21 @@ func (m *MockUpdateChecker) CheckIfUpdateIsAvailable(currentVersion, latestVersi
 }
 
 type MockFileDownloader struct {
-	DownloadAndUnzipRegistryFunc      func() error
-	DownloadAndUnzipRegistryQuietFunc func() error
+	DownloadAndUnzipRegistryFunc      func() (bool, error)
+	DownloadAndUnzipRegistryQuietFunc func() (bool, error)
 }
 
-func (m *MockFileDownloader) DownloadAndUnzipRegistry() error {
+func (m *MockFileDownloader) DownloadAndUnzipRegistry() (bool, error) {
 	if m.DownloadAndUnzipRegistryFunc != nil {
 		return m.DownloadAndUnzipRegistryFunc()
 	}
-	return nil
+	if m.DownloadAndUnzipRegistryQuietFunc != nil {
+		return m.DownloadAndUnzipRegistryQuietFunc()
+	}
+	return false, nil
 }
 
-func (m *MockFileDownloader) DownloadAndUnzipRegistryQuiet() error {
+func (m *MockFileDownloader) DownloadAndUnzipRegistryQuiet() (bool, error) {
 	if m.DownloadAndUnzipRegistryQuietFunc != nil {
 		return m.DownloadAndUnzipRegistryQuietFunc()
 	}
@@ -281,13 +284,13 @@ func TestListService(t *testing.T) {
 		}
 
 		mockFileDownloader := &MockFileDownloader{
-			DownloadAndUnzipRegistryFunc: func() error {
+			DownloadAndUnzipRegistryFunc: func() (bool, error) {
 				called = true
-				return nil
+				return false, nil
 			},
-			DownloadAndUnzipRegistryQuietFunc: func() error {
+			DownloadAndUnzipRegistryQuietFunc: func() (bool, error) {
 				called = true
-				return nil
+				return false, nil
 			},
 		}
 
@@ -319,13 +322,13 @@ func TestListService(t *testing.T) {
 		}
 
 		mockFileDownloader := &MockFileDownloader{
-			DownloadAndUnzipRegistryFunc: func() error {
+			DownloadAndUnzipRegistryFunc: func() (bool, error) {
 				called = true
-				return nil
+				return false, nil
 			},
-			DownloadAndUnzipRegistryQuietFunc: func() error {
+			DownloadAndUnzipRegistryQuietFunc: func() (bool, error) {
 				called = true
-				return nil
+				return false, nil
 			},
 		}
 
@@ -583,8 +586,8 @@ func TestListAllPackagesGolden(t *testing.T) {
 		}
 
 		mockFileDownloader := &MockFileDownloader{
-			DownloadAndUnzipRegistryFunc: func() error {
-				return nil // Success
+			DownloadAndUnzipRegistryFunc: func() (bool, error) {
+				return true, nil // Success
 			},
 		}
 
@@ -619,8 +622,8 @@ func TestListAllPackagesGolden(t *testing.T) {
 		}
 
 		mockFileDownloader := &MockFileDownloader{
-			DownloadAndUnzipRegistryFunc: func() error {
-				return assert.AnError // Simulate download failure
+			DownloadAndUnzipRegistryFunc: func() (bool, error) {
+				return false, assert.AnError // Simulate download failure
 			},
 		}
 
@@ -694,11 +697,11 @@ func TestDownloadAndUnzipRegistryWrapper(t *testing.T) {
 		// Arrange: swap out function
 		called := false
 		prev := downloadAndUnzipRegistryFn
-		downloadAndUnzipRegistryFn = func() error { called = true; return nil }
+		downloadAndUnzipRegistryFn = func() (bool, error) { called = true; return false, nil }
 		defer func() { downloadAndUnzipRegistryFn = prev }()
 
 		d := &defaultFileDownloader{}
-		err := d.DownloadAndUnzipRegistry()
+		_, err := d.DownloadAndUnzipRegistry()
 
 		assert.NoError(t, err)
 		assert.True(t, called)

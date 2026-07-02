@@ -31,7 +31,7 @@ The registry URL list can be overridden using the NVPM_REGISTRY_URLS environment
 		if !ShouldUseJSONOutput() && !ShouldUsePlainOutput() {
 			fmt.Println("Downloading registry...")
 		}
-		if err := syncRegistryFn(); err != nil {
+		if _, err := syncRegistryFn(); err != nil {
 			if ShouldUseJSONOutput() {
 				result := map[string]interface{}{
 					"success": false,
@@ -202,7 +202,7 @@ func init() {
 }
 
 // downloadAndUnzipRegistryForced downloads and unzips the registry, forcing a fresh download
-func downloadAndUnzipRegistryForced() error {
+func downloadAndUnzipRegistryForced() (bool, error) {
 	return files.DownloadAndUnzipRegistryForced()
 }
 

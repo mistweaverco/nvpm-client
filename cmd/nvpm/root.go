@@ -12,9 +12,10 @@ import (
 
 var cfg = config.NewConfig(config.Config{
 	Flags: config.ConfigFlags{
-		CacheMaxAge: 24 * time.Hour,        // Default to 24 hours
-		Color:       config.ColorModeAuto,  // Default to auto (respect TTY)
-		Output:      config.OutputModeRich, // Default to rich output
+		CacheMaxAge:   24 * time.Hour,        // Default to 24 hours
+		MinReleaseAge: 7 * 24 * time.Hour,    // Default to 7 days (discovery-time based)
+		Color:         config.ColorModeAuto,  // Default to auto (respect TTY)
+		Output:        config.OutputModeRich, // Default to rich output
 	},
 })
 
@@ -52,6 +53,7 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.PersistentFlags().BoolVar(&cfg.Flags.Version, "version", false, "version")
 	rootCmd.PersistentFlags().DurationVar(&cfg.Flags.CacheMaxAge, "cache-max-age", 24*time.Hour, "maximum age of registry cache (e.g., 1h, 24h, 7d)")
+	rootCmd.PersistentFlags().DurationVar(&cfg.Flags.MinReleaseAge, "min-release-age", 7*24*time.Hour, "minimum age before installing/updating a newly discovered version (uses local discovery time; set 0 to disable)")
 	colorFlag := rootCmd.PersistentFlags().VarPF(&cfg.Flags.Color, "color", "", "when to use colors and icons: always, auto (default), never")
 	colorFlag.NoOptDefVal = string(config.ColorModeAlways) // If --color is used without value, default to "always"
 
@@ -65,6 +67,11 @@ func init() {
 			if !cmd.Flags().Changed("cache-max-age") {
 				if d := fileCfg.RegistryCacheMaxAgeOrZero(); d > 0 {
 					cfg.Flags.CacheMaxAge = d
+				}
+			}
+			if !cmd.Flags().Changed("min-release-age") {
+				if d := fileCfg.RegistryMinReleaseAgeOrZero(); d > 0 {
+					cfg.Flags.MinReleaseAge = d
 				}
 			}
 			if !cmd.Flags().Changed("color") && fileCfg.UI.Color != "" {

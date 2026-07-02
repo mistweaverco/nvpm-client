@@ -126,6 +126,10 @@ Examples:
 	// Enable shell completion for package IDs based on the local registry.
 	ValidArgsFunction: packageIDCompletion,
 	Run: func(cmd *cobra.Command, args []string) {
+		providers.SetMinReleaseAgePolicy(providers.MinReleaseAgePolicy{
+			MinAge: cfg.Flags.MinReleaseAge,
+			Force:  installForce,
+		})
 		if err := providers.ConfigureExternalTreeSitterQueriesFromCLI(
 			cmd.Flags().Changed("external-treesitter-queries"),
 			installExternalTreeSitterQueries,
@@ -385,10 +389,12 @@ Examples:
 
 var installIntegrations []string
 var installExternalTreeSitterQueries string
+var installForce bool
 
 func init() {
 	installCmd.Flags().StringSliceVar(&installIntegrations, "integrate", nil, "run integration backends after install (e.g. --integrate neovim)")
 	installCmd.Flags().StringVar(&installExternalTreeSitterQueries, "external-treesitter-queries", "ask", "when Neovim integration needs optional query-only git repos from the registry: ask (default), always, never (overridden by NVPM_EXTERNAL_TREESITTER_QUERIES when this flag is left at default)")
+	installCmd.Flags().BoolVar(&installForce, "force", false, "bypass min-release-age safety checks")
 }
 
 // indirections for testability

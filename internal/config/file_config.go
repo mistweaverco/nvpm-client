@@ -12,12 +12,13 @@ import (
 // It lives next to nvpm-lock.json in the NVPM config directory.
 type FileConfig struct {
 	Registry struct {
-		URLs        []string `yaml:"urls"`
-		CacheMaxAge string   `yaml:"cacheMaxAge"`
+		URLs          []string `yaml:"urls"`
+		CacheMaxAge   string   `yaml:"cache-max-age"`
+		MinReleaseAge string   `yaml:"min-release-age"`
 	} `yaml:"registry"`
 
 	Paths struct {
-		CacheDir string `yaml:"cacheDir"`
+		CacheDir string `yaml:"cache-dir"`
 	} `yaml:"paths"`
 
 	UI struct {
@@ -53,6 +54,20 @@ func (fc FileConfig) RegistryCacheMaxAgeOrZero() time.Duration {
 		return 0
 	}
 	d, err := time.ParseDuration(fc.Registry.CacheMaxAge)
+	if err != nil {
+		return 0
+	}
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+func (fc FileConfig) RegistryMinReleaseAgeOrZero() time.Duration {
+	if fc.Registry.MinReleaseAge == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(fc.Registry.MinReleaseAge)
 	if err != nil {
 		return 0
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/mistweaverco/nvpm-client/internal/config"
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/providers"
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -70,7 +71,8 @@ func (m *MockUpdateChecker) CheckIfUpdateIsAvailable(currentVersion, latestVersi
 }
 
 type MockFileDownloader struct {
-	DownloadAndUnzipRegistryFunc func() error
+	DownloadAndUnzipRegistryFunc      func() error
+	DownloadAndUnzipRegistryQuietFunc func() error
 }
 
 func (m *MockFileDownloader) DownloadAndUnzipRegistry() error {
@@ -78,6 +80,13 @@ func (m *MockFileDownloader) DownloadAndUnzipRegistry() error {
 		return m.DownloadAndUnzipRegistryFunc()
 	}
 	return nil
+}
+
+func (m *MockFileDownloader) DownloadAndUnzipRegistryQuiet() error {
+	if m.DownloadAndUnzipRegistryQuietFunc != nil {
+		return m.DownloadAndUnzipRegistryQuietFunc()
+	}
+	return m.DownloadAndUnzipRegistry()
 }
 
 // Golden file testing utilities
@@ -171,6 +180,8 @@ func captureOutputWithMode(t *testing.T, fn func(), outputMode config.OutputMode
 	// Set up in-memory file system to prevent disk I/O
 	cleanupFS := setupInMemoryFileSystem(t)
 	defer cleanupFS()
+	providers.SetDiscoveryWritesEnabled(false)
+	defer providers.SetDiscoveryWritesEnabled(true)
 
 	// Save current config
 	oldOutput := cfg.Flags.Output
@@ -178,6 +189,12 @@ func captureOutputWithMode(t *testing.T, fn func(), outputMode config.OutputMode
 
 	// Set output mode to plain for golden file tests
 	cfg.Flags.Output = outputMode
+	showDiscoveryProgress = false
+	showRegistryProgress = false
+	defer func() {
+		showDiscoveryProgress = true
+		showRegistryProgress = true
+	}()
 	SetColorConfigFunc(func() config.ConfigFlags {
 		return cfg.Flags
 	})
@@ -268,6 +285,10 @@ func TestListService(t *testing.T) {
 				called = true
 				return nil
 			},
+			DownloadAndUnzipRegistryQuietFunc: func() error {
+				called = true
+				return nil
+			},
 		}
 
 		service := NewListServiceWithDependencies(
@@ -299,6 +320,10 @@ func TestListService(t *testing.T) {
 
 		mockFileDownloader := &MockFileDownloader{
 			DownloadAndUnzipRegistryFunc: func() error {
+				called = true
+				return nil
+			},
+			DownloadAndUnzipRegistryQuietFunc: func() error {
 				called = true
 				return nil
 			},

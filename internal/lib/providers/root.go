@@ -1,7 +1,9 @@
 package providers
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/log"
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
@@ -29,6 +31,51 @@ const (
 )
 
 var Logger = log.NewLogger()
+
+type MinReleaseAgePolicy struct {
+	MinAge    time.Duration
+	Force     bool
+	BypassAll bool
+}
+
+var minReleaseAgePolicy = MinReleaseAgePolicy{
+	MinAge: 0,
+}
+
+func SetMinReleaseAgePolicy(p MinReleaseAgePolicy) {
+	minReleaseAgePolicy = p
+}
+
+func enforceMinReleaseAge(sourceID, version string) error {
+	p := minReleaseAgePolicy
+	if version == "" || version == "latest" {
+		// We only gate concrete versions.
+		return nil
+	}
+	now := time.Now()
+	firstSeen, err := getOrSetFirstSeen(sourceID, version, now)
+	if err != nil {
+		// If we cannot read/write the local discovery DB, fail closed unless explicitly forced.
+		if p.Force || p.BypassAll {
+			Logger.Info(fmt.Sprintf("min-release-age: warning: cannot persist discovery time: %v", err))
+			return nil
+		}
+		return fmt.Errorf("min-release-age: cannot read discovery database: %w", err)
+	}
+	if p.BypassAll || p.Force {
+		return nil
+	}
+	if p.MinAge <= 0 {
+		return nil
+	}
+	age := now.Sub(firstSeen)
+	if age >= p.MinAge {
+		return nil
+	}
+	remaining := p.MinAge - age
+	return fmt.Errorf("min-release-age: %s@%s was first discovered %s ago; wait %s more or pass --force",
+		sourceID, version, age.Round(time.Second), remaining.Round(time.Second))
+}
 
 // Global factory instance - can be replaced for testing
 var globalFactory ProviderFactory = &DefaultProviderFactory{}
@@ -356,6 +403,10 @@ func ResolveVersion(sourceId string, version string) (string, error) {
 }
 
 func Install(sourceId string, version string) bool {
+	if err := enforceMinReleaseAge(sourceId, version); err != nil {
+		Logger.Error(err.Error())
+		return false
+	}
 	provider := detectProvider(sourceId)
 	switch provider {
 	case ProviderNPM:
@@ -430,6 +481,17 @@ func Remove(sourceId string) bool {
 }
 
 func Update(sourceId string) bool {
+	// Enforce min-release-age for updates too (provider Update() implementations call into
+	// provider Install() directly, so this must live in the wrapper).
+	registry := registry_parser.NewDefaultRegistryParser()
+	registryItem := registry.GetBySourceId(sourceId)
+	if registryItem.Version != "" {
+		if err := enforceMinReleaseAge(sourceId, registryItem.Version); err != nil {
+			Logger.Error(err.Error())
+			return false
+		}
+	}
+
 	provider := detectProvider(sourceId)
 	switch provider {
 	case ProviderNPM:

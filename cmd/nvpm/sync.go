@@ -63,6 +63,9 @@ var syncPackagesCmd = &cobra.Command{
 This command reads the nvpm-lock.json file and ensures that all packages
 are installed with their exact versions as specified in the lock file.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		// Sync installs exact versions from the lockfile (already-installed intent),
+		// so we bypass min-release-age gating here.
+		providers.SetMinReleaseAgePolicy(providers.MinReleaseAgePolicy{BypassAll: true})
 		if err := providers.ConfigureExternalTreeSitterQueriesFromCLI(
 			cmd.Flags().Changed("external-treesitter-queries"),
 			syncExternalTreeSitterQueries,

@@ -786,9 +786,9 @@ func resolveNeovimTreeSitterInheritDependencies(
 	var hint strings.Builder
 	for _, l := range missing {
 		if ids := registrySourceIDsForTreeSitterLanguage(l, reg); len(ids) > 0 {
-			fmt.Fprintf(&hint, "\n• %s — e.g. nvpm install %s --integrate neovim", l, ids[0])
+			fmt.Fprintf(&hint, "\n• %s - e.g. nvpm install %s --integrate neovim", l, ids[0])
 		} else {
-			fmt.Fprintf(&hint, "\n• %s — install a Tree-sitter-parser package that lists this language in the registry", l)
+			fmt.Fprintf(&hint, "\n• %s - install a Tree-sitter-parser package that lists this language in the registry", l)
 		}
 	}
 	title := fmt.Sprintf("Missing base tree-sitter grammar(s) for Neovim: %s", strings.Join(missing, ", "))

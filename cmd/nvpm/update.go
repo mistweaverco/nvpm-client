@@ -145,6 +145,11 @@ Examples:
 	// Enable shell completion for installed package IDs only.
 	ValidArgsFunction: installedPackageIDCompletion,
 	Run: func(cmd *cobra.Command, args []string) {
+		forceFlag, _ := cmd.Flags().GetBool("force")
+		providers.SetMinReleaseAgePolicy(providers.MinReleaseAgePolicy{
+			MinAge: cfg.Flags.MinReleaseAge,
+			Force:  forceFlag,
+		})
 		selfFlag, _ := cmd.Flags().GetBool("self")
 		if selfFlag {
 			service := newUpdateService()
@@ -291,6 +296,7 @@ Examples:
 func init() {
 	updateCmd.Flags().BoolP("all", "A", false, "Update all installed packages to their latest versions")
 	updateCmd.Flags().Bool("self", false, "Update nvpm itself to the latest version")
+	updateCmd.Flags().Bool("force", false, "bypass min-release-age safety checks")
 }
 
 // newUpdateService is a factory to allow test injection

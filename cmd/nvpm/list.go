@@ -12,8 +12,17 @@ import (
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/providers"
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/spinnerutil"
 	"github.com/spf13/cobra"
 )
+
+// showDiscoveryProgress controls whether list commands show discovery progress (spinner/messages).
+// Tests disable this to keep golden outputs stable.
+var showDiscoveryProgress = true
+
+// showRegistryProgress controls whether list commands show registry refresh progress.
+// Tests disable this to keep golden outputs stable.
+var showRegistryProgress = true
 
 // ListService handles listing operations with dependency injection
 type ListService struct {
@@ -198,7 +207,7 @@ func (o ListQueryOptions) constraintDescriptionPlain() string {
 	if len(o.OnlyCategories) > 0 {
 		parts = append(parts, fmt.Sprintf("categories: %s", strings.Join(o.OnlyCategories, ", ")))
 	}
-	return " — " + strings.Join(parts, "; ")
+	return " - " + strings.Join(parts, "; ")
 }
 
 func (o ListQueryOptions) constraintDescriptionMarkdown() string {
@@ -215,7 +224,7 @@ func (o ListQueryOptions) constraintDescriptionMarkdown() string {
 	if len(o.OnlyCategories) > 0 {
 		parts = append(parts, fmt.Sprintf("categories: **%s**", strings.Join(o.OnlyCategories, ", ")))
 	}
-	return " — " + strings.Join(parts, "; ")
+	return " - " + strings.Join(parts, "; ")
 }
 
 func appendListQueryJSONFields(m map[string]any, o ListQueryOptions) {
@@ -233,18 +242,82 @@ func appendListQueryJSONFields(m map[string]any, o ListQueryOptions) {
 // newListService is a factory to allow test injection
 var newListService = NewListService
 
+// refreshRegistry ensures the registry is up to date before listing.
+// Errors are ignored intentionally so listing still works offline.
+func (ls *ListService) refreshRegistry() {
+	_ = ls.fileDownloader.DownloadAndUnzipRegistry()
+}
+
+func (ls *ListService) shouldShowListPrepSpinner() bool {
+	return (showRegistryProgress || showDiscoveryProgress) && !ShouldUseJSONOutput()
+}
+
+func (ls *ListService) discoveryPairsForInstalled(localPackages []local_packages_parser.LocalPackageItem) []providers.DiscoveryPair {
+	if cfg.Flags.MinReleaseAge <= 0 || len(localPackages) == 0 {
+		return nil
+	}
+	pairs := make([]providers.DiscoveryPair, 0, len(localPackages))
+	for _, pkg := range localPackages {
+		stable, prerelease := ls.registry.GetLatestVersions(pkg.SourceID)
+		if stable == "" && prerelease == "" {
+			continue
+		}
+		latest := chooseBestRemoteVersion(pkg.Version, stable, prerelease)
+		if latest == "" || latest == "latest" {
+			continue
+		}
+		pairs = append(pairs, providers.DiscoveryPair{SourceID: pkg.SourceID, Version: latest})
+	}
+	return pairs
+}
+
+func (ls *ListService) discoveryPairsForRegistry(registry []registry_parser.RegistryItem) []providers.DiscoveryPair {
+	if cfg.Flags.MinReleaseAge <= 0 || len(registry) == 0 {
+		return nil
+	}
+	pairs := make([]providers.DiscoveryPair, 0, len(registry)*2)
+	for _, it := range registry {
+		id := strings.TrimSpace(it.Source.ID)
+		if id == "" {
+			continue
+		}
+		if v := strings.TrimSpace(it.Version); v != "" && v != "latest" {
+			pairs = append(pairs, providers.DiscoveryPair{SourceID: id, Version: v})
+		}
+		if v := strings.TrimSpace(it.PrereleaseVersion); v != "" && v != "latest" {
+			pairs = append(pairs, providers.DiscoveryPair{SourceID: id, Version: v})
+		}
+	}
+	return pairs
+}
+
+func (ls *ListService) recordDiscoveryPairs(pairs []providers.DiscoveryPair) {
+	if len(pairs) == 0 {
+		return
+	}
+	_ = providers.RecordDiscoveryBatch(pairs)
+}
+
 // ListInstalledPackages lists locally installed packages.
 // Name filters (opts.NameFilters) match IDs, names, or registry aliases (substring, case-insensitive).
 // Optional opts.OnlyOutdated, OnlyProviders, and OnlyCategories are applied in addition (AND).
 func (ls *ListService) ListInstalledPackages(opts ListQueryOptions) {
-	// Ensure the registry is up to date so that update checks
-	// for installed packages use the freshest available data.
-	// Errors are ignored intentionally so that listing still works
-	// even when the registry cannot be refreshed (e.g. offline).
-	_ = ls.fileDownloader.DownloadAndUnzipRegistry()
-
-	localPackages := ls.localPackages.GetData(true).Packages
+	var localPackages []local_packages_parser.LocalPackageItem
 	filters := opts.NameFilters
+
+	prep := func() {
+		_ = ls.fileDownloader.DownloadAndUnzipRegistryQuiet()
+		localPackages = ls.localPackages.GetData(true).Packages
+		ls.recordDiscoveryPairs(ls.discoveryPairsForInstalled(localPackages))
+	}
+
+	if ls.shouldShowListPrepSpinner() {
+		_ = spinnerutil.Run("Preparing package list...", prep)
+	} else {
+		_ = ls.fileDownloader.DownloadAndUnzipRegistry()
+		localPackages = ls.localPackages.GetData(true).Packages
+		ls.recordDiscoveryPairs(ls.discoveryPairsForInstalled(localPackages))
+	}
 
 	// Filter packages if name filters are provided
 	filteredPackages := localPackages
@@ -539,13 +612,22 @@ func (ls *ListService) listInstalledPackagesJSON(filteredPackages []local_packag
 // Name filters (opts.NameFilters) match IDs, names, or aliases (substring, case-insensitive).
 // Optional opts.OnlyOutdated, OnlyProviders, and OnlyCategories apply in addition (AND).
 func (ls *ListService) ListAllPackages(opts ListQueryOptions) {
-	// Make sure we have an up-to-date registry before listing.
-	// This mirrors the behavior of the TUI boot process which
-	// refreshes the registry when the cache is too old.
-	_ = ls.fileDownloader.DownloadAndUnzipRegistry()
-
-	registry := ls.registry.GetData(true)
+	var registry []registry_parser.RegistryItem
 	filters := opts.NameFilters
+
+	prep := func() {
+		_ = ls.fileDownloader.DownloadAndUnzipRegistryQuiet()
+		registry = ls.registry.GetData(true)
+		ls.recordDiscoveryPairs(ls.discoveryPairsForRegistry(registry))
+	}
+
+	if ls.shouldShowListPrepSpinner() {
+		_ = spinnerutil.Run("Preparing package list...", prep)
+	} else {
+		_ = ls.fileDownloader.DownloadAndUnzipRegistry()
+		registry = ls.registry.GetData(true)
+		ls.recordDiscoveryPairs(ls.discoveryPairsForRegistry(registry))
+	}
 
 	if len(registry) == 0 {
 		if !ShouldUseJSONOutput() {
@@ -771,7 +853,7 @@ func (ls *ListService) listAllPackagesRich(filteredRegistry []registry_parser.Re
 				if description != "" {
 					description = strings.ReplaceAll(description, "|", "\\|")
 				} else {
-					description = "—"
+					description = "-"
 				}
 
 				markdown.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n", pkg.Source.ID, pkg.Version, statusText, description))
@@ -785,6 +867,8 @@ func (ls *ListService) listAllPackagesRich(filteredRegistry []registry_parser.Re
 
 // renderMarkdown renders markdown content using glamour
 func (ls *ListService) renderMarkdown(markdown string) {
+	spinnerutil.ResetTerminal()
+
 	// Get terminal width, default to 80 if not available
 	width := 80
 	if w, _, err := term.GetSize(os.Stdout.Fd()); err == nil && w > 0 {
@@ -975,10 +1059,17 @@ func (d *defaultUpdateChecker) CheckIfUpdateIsAvailable(currentVersion, latestVe
 }
 
 // indirection for testability
-var downloadAndUnzipRegistryFn = files.DownloadAndUnzipRegistry
+var (
+	downloadAndUnzipRegistryFn      = files.DownloadAndUnzipRegistry
+	downloadAndUnzipRegistryQuietFn = files.DownloadAndUnzipRegistryQuiet
+)
 
 func (d *defaultFileDownloader) DownloadAndUnzipRegistry() error {
 	return downloadAndUnzipRegistryFn()
+}
+
+func (d *defaultFileDownloader) DownloadAndUnzipRegistryQuiet() error {
+	return downloadAndUnzipRegistryQuietFn()
 }
 
 // Legacy functions for backward compatibility

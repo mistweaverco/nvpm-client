@@ -95,7 +95,7 @@ func (p *GitHubProvider) Install(sourceID, version string) bool {
 	registry := githubRegistryParser()
 	registryItem := registry.GetBySourceId(sourceID)
 
-	// Shorthand github:package-name (no owner/repo slash) — resolve to github:owner/repo when the
+	// Shorthand github:package-name (no owner/repo slash) - resolve to github:owner/repo when the
 	// registry has a package whose name (or alias) matches the segment after "github:".
 	if !strings.Contains(repo, "/") && registryItem.Source.ID == "" {
 		if hit := registry.GetByNameOrAlias(repo); hit.Source.ID != "" {

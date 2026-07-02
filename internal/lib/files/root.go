@@ -751,9 +751,18 @@ func mergeRegistryJSONArrays(registryJSONs [][]byte) ([]byte, error) {
 // DownloadAndUnzipRegistry downloads the registry from the default URL and unzips it
 // This is used to ensure the registry is available for commands that need it
 func DownloadAndUnzipRegistry() error {
+	return downloadAndUnzipRegistry(getRegistryCacheMaxAge(), true)
+}
+
+// DownloadAndUnzipRegistryQuiet is like DownloadAndUnzipRegistry but does not show its own
+// download spinner. Use this when the caller already wraps the operation in a spinner.
+func DownloadAndUnzipRegistryQuiet() error {
+	return downloadAndUnzipRegistry(getRegistryCacheMaxAge(), false)
+}
+
+func downloadAndUnzipRegistry(cacheMaxAge time.Duration, showSpinner bool) error {
 	registryURLs := ResolveRegistryURLs()
 	registryJSONPath := GetAppRegistryFilePath()
-	cacheMaxAge := getRegistryCacheMaxAge()
 
 	if len(registryURLs) == 0 {
 		registryURLs = []string{defaultRegistryURL()}
@@ -790,7 +799,7 @@ func DownloadAndUnzipRegistry() error {
 		}
 	}
 
-	// Download all zips with spinner (only those that need it).
+	// Download all zips (only those that need it).
 	var downloadErr error
 	action := func() {
 		for i, u := range registryURLs {
@@ -802,12 +811,18 @@ func DownloadAndUnzipRegistry() error {
 		}
 	}
 
-	if err := spinnerutil.Run("Downloading registry...", action); err != nil {
-		return err
-	}
+	if needsDownload {
+		if showSpinner {
+			if err := spinnerutil.Run("Downloading registry...", action); err != nil {
+				return err
+			}
+		} else {
+			action()
+		}
 
-	if downloadErr != nil {
-		return fmt.Errorf("failed to download registry: %w", downloadErr)
+		if downloadErr != nil {
+			return fmt.Errorf("failed to download registry: %w", downloadErr)
+		}
 	}
 
 	// Unzip each registry and merge them into a single nvpm-registry.json for consumers.
@@ -881,5 +896,5 @@ func DownloadAndUnzipRegistryForced() error {
 
 	// Reuse the non-forced merge/unzip path now that zips are fresh.
 	// (It will merge and write the final JSON.)
-	return DownloadAndUnzipRegistry()
+	return DownloadAndUnzipRegistryQuiet()
 }

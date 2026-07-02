@@ -13,6 +13,9 @@ import (
 // They are available in this package for use in update tests
 
 func TestUpdateAllPackagesGolden(t *testing.T) {
+	// Update tests expect updates to proceed; disable min-release-age gating here.
+	cfg.Flags.MinReleaseAge = 0
+
 	t.Run("update all packages with empty data", func(t *testing.T) {
 		out := &MockOutputWriter{}
 		prevFactory := newUpdateService

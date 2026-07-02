@@ -9,7 +9,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "cacheDir": {
+        "cache-dir": {
           "type": "string",
           "description": "Cache directory (used when NVPM_CACHE env var is not set). Supports absolute paths, ~, or paths relative to $HOME.",
           "minLength": 1
@@ -29,10 +29,15 @@
           },
           "minItems": 1
         },
-        "cacheMaxAge": {
+        "cache-max-age": {
           "type": "string",
           "description": "How long the downloaded registry zip is considered fresh. Go duration string (e.g. 30m, 6h, 24h, 0).",
-          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)$|^0$"
+          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h|d)$|^0$"
+        },
+        "min-release-age": {
+          "type": "string",
+          "description": "Minimum age before installing/updating a newly discovered version. Uses local discovery time (not upstream timestamps). Go duration string (e.g. 7d, 168h, 0).",
+          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h|d)$|^0$"
         }
       }
     },

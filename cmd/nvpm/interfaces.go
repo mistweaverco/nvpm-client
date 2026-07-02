@@ -28,4 +28,7 @@ type UpdateChecker interface {
 // FileDownloader defines the interface for downloading files
 type FileDownloader interface {
 	DownloadAndUnzipRegistry() error
+	// DownloadAndUnzipRegistryQuiet is like DownloadAndUnzipRegistry but does not show
+	// its own download spinner. Use when the caller already wraps the operation.
+	DownloadAndUnzipRegistryQuiet() error
 }

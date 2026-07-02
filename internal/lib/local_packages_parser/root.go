@@ -13,9 +13,11 @@ var marshalIndent = json.MarshalIndent
 const lockSchemaURL = "https://nvpm.dev/nvpm-lock.schema.json"
 
 type LocalPackageItem struct {
-	SourceID string         `json:"sourceId"`
-	Version  string         `json:"version"`
-	Extras   *PackageExtras `json:"extras,omitempty"`
+	SourceID string `json:"sourceId"`
+	Version  string `json:"version"`
+	// Commit is the resolved full git commit SHA for git-hosted packages (github/gitlab/codeberg).
+	Commit string         `json:"commit,omitempty"`
+	Extras *PackageExtras `json:"extras,omitempty"`
 }
 
 type PackageExtras struct {
@@ -469,10 +471,15 @@ func (lpp *LocalPackagesParser) GetDataForProvider(provider string) LocalPackage
 }
 
 func (lpp *LocalPackagesParser) AddLocalPackage(sourceId string, version string) error {
+	return lpp.AddLocalPackageWithCommit(sourceId, version, "")
+}
+
+func (lpp *LocalPackagesParser) AddLocalPackageWithCommit(sourceId, version, commit string) error {
 	// Normalize the source ID to new format before storing
 	normalizedID := normalizePackageID(sourceId)
 	localPackageRoot := lpp.GetData(false)
 	packageExists := false
+	commit = strings.TrimSpace(commit)
 
 	// Check if the package is already installed (compare normalized IDs)
 	for i, pkg := range localPackageRoot.Packages {
@@ -484,6 +491,11 @@ func (lpp *LocalPackagesParser) AddLocalPackage(sourceId string, version string)
 			}
 			// Update the existing package with the new version
 			localPackageRoot.Packages[i].Version = version
+			if commit != "" {
+				localPackageRoot.Packages[i].Commit = commit
+			} else if pkg.Version != version {
+				localPackageRoot.Packages[i].Commit = ""
+			}
 			packageExists = true
 			break
 		}
@@ -491,10 +503,14 @@ func (lpp *LocalPackagesParser) AddLocalPackage(sourceId string, version string)
 
 	// If not found, add the new package with normalized ID
 	if !packageExists {
-		localPackageRoot.Packages = append(localPackageRoot.Packages, LocalPackageItem{
+		item := LocalPackageItem{
 			SourceID: normalizedID,
 			Version:  version,
-		})
+		}
+		if commit != "" {
+			item.Commit = commit
+		}
+		localPackageRoot.Packages = append(localPackageRoot.Packages, item)
 	}
 
 	localPackageRoot.Schema = lockSchemaURL
@@ -580,6 +596,10 @@ func GetDataForProvider(provider string) LocalPackageRoot {
 
 func AddLocalPackage(sourceId string, version string) error {
 	return globalParser.AddLocalPackage(sourceId, version)
+}
+
+func AddLocalPackageWithCommit(sourceId, version, commit string) error {
+	return globalParser.AddLocalPackageWithCommit(sourceId, version, commit)
 }
 
 func RemoveLocalPackage(sourceId string) error {

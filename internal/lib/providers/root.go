@@ -52,8 +52,17 @@ func enforceMinReleaseAge(sourceID, version string) error {
 		// We only gate concrete versions.
 		return nil
 	}
+	discoveryVersion, err := discoveryVersionForEnforcement(sourceID, version)
+	if err != nil {
+		if p.Force || p.BypassAll {
+			Logger.Info(fmt.Sprintf("min-release-age: warning: cannot resolve discovery version for %s@%s: %v", sourceID, version, err))
+			discoveryVersion = version
+		} else {
+			return fmt.Errorf("min-release-age: cannot resolve git commit for %s@%s: %w", sourceID, version, err)
+		}
+	}
 	now := time.Now()
-	firstSeen, err := getOrSetFirstSeen(sourceID, version, now)
+	firstSeen, err := getOrSetFirstSeen(sourceID, discoveryVersion, now)
 	if err != nil {
 		// If we cannot read/write the local discovery DB, fail closed unless explicitly forced.
 		if p.Force || p.BypassAll {
@@ -74,7 +83,7 @@ func enforceMinReleaseAge(sourceID, version string) error {
 	}
 	remaining := p.MinAge - age
 	return fmt.Errorf("min-release-age: %s@%s was first discovered %s ago; wait %s more or pass --force",
-		sourceID, version, age.Round(time.Second), remaining.Round(time.Second))
+		sourceID, discoveryVersion, age.Round(time.Second), remaining.Round(time.Second))
 }
 
 // Global factory instance - can be replaced for testing

@@ -37,7 +37,6 @@ var gitlabReadDir = os.ReadDir
 var gitlabHasCommand = shell_out.HasCommand
 
 // Injectable local packages helpers for tests
-var lppGitlabAdd = local_packages_parser.AddLocalPackage
 var lppGitlabRemove = local_packages_parser.RemoveLocalPackage
 var lppGitlabGetDataForProvider = local_packages_parser.GetDataForProvider
 
@@ -190,7 +189,8 @@ func (p *GitLabProvider) installFromRelease(sourceID, repo, version string, regi
 	}
 
 	// Add to local packages
-	if err := lppGitlabAdd(sourceID, resolvedVersion); err != nil {
+	repoURL := p.getRepoURL(repo)
+	if err := persistGitHostedPackage(sourceID, resolvedVersion, "", repoURL); err != nil {
 		Logger.Error(fmt.Sprintf("GitLab Install: Error adding package to local packages: %v", err))
 		return false
 	}
@@ -254,7 +254,7 @@ func (p *GitLabProvider) installFromGit(sourceID, repo, version string) bool {
 	}
 
 	// Add to local packages
-	if err := lppGitlabAdd(sourceID, resolvedVersion); err != nil {
+	if err := persistGitHostedPackage(sourceID, resolvedVersion, repoPath, repoURL); err != nil {
 		Logger.Error(fmt.Sprintf("GitLab Install: Error adding package to local packages: %v", err))
 		return false
 	}

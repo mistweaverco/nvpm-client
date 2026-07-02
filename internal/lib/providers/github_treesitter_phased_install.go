@@ -198,7 +198,8 @@ func GitHubTreeSitterPhaseRegisterPackage(sourceID, resolvedVersion string) bool
 		return false
 	}
 
-	if err := lppGithubAdd(sourceID, d.resolvedVersion); err != nil {
+	repoURL := d.p.getRepoURL(d.repo)
+	if err := persistGitHostedPackage(sourceID, d.resolvedVersion, d.repoPath, repoURL); err != nil {
 		Logger.Error(fmt.Sprintf("GitHub Install: Error adding package to local packages: %v", err))
 		return false
 	}

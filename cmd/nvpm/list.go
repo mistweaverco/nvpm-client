@@ -245,7 +245,7 @@ var newListService = NewListService
 // refreshRegistry ensures the registry is up to date before listing.
 // Errors are ignored intentionally so listing still works offline.
 func (ls *ListService) refreshRegistry() {
-	_ = ls.fileDownloader.DownloadAndUnzipRegistry()
+	_, _ = ls.fileDownloader.DownloadAndUnzipRegistry()
 }
 
 func (ls *ListService) shouldShowListPrepSpinner() bool {
@@ -266,7 +266,15 @@ func (ls *ListService) discoveryPairsForInstalled(localPackages []local_packages
 		if latest == "" || latest == "latest" {
 			continue
 		}
-		pairs = append(pairs, providers.DiscoveryPair{SourceID: pkg.SourceID, Version: latest})
+		pair := providers.DiscoveryPair{SourceID: pkg.SourceID, Version: latest}
+		if providers.IsGitHostedSourceID(pkg.SourceID) {
+			commit, err := providers.ResolveGitDiscoveryCommit(pkg.SourceID, latest)
+			if err != nil {
+				continue
+			}
+			pair.Commit = commit
+		}
+		pairs = append(pairs, pair)
 	}
 	return pairs
 }
@@ -278,7 +286,10 @@ func (ls *ListService) discoveryPairsForRegistry(registry []registry_parser.Regi
 	pairs := make([]providers.DiscoveryPair, 0, len(registry)*2)
 	for _, it := range registry {
 		id := strings.TrimSpace(it.Source.ID)
-		if id == "" {
+		if id == "" || providers.IsGitHostedSourceID(id) {
+			// Skip git-hosted entries: resolving tag→commit for the full registry would
+			// require thousands of ls-remote calls. Git discovery is recorded at install
+			// time (and from the lockfile on nvpm list for installed packages).
 			continue
 		}
 		if v := strings.TrimSpace(it.Version); v != "" && v != "latest" {
@@ -291,7 +302,11 @@ func (ls *ListService) discoveryPairsForRegistry(registry []registry_parser.Regi
 	return pairs
 }
 
-func (ls *ListService) recordDiscoveryPairs(pairs []providers.DiscoveryPair) {
+func (ls *ListService) recordDiscoveryOnRegistryRefresh(refreshed bool, buildPairs func() []providers.DiscoveryPair) {
+	if !refreshed {
+		return
+	}
+	pairs := buildPairs()
 	if len(pairs) == 0 {
 		return
 	}
@@ -306,17 +321,23 @@ func (ls *ListService) ListInstalledPackages(opts ListQueryOptions) {
 	filters := opts.NameFilters
 
 	prep := func() {
-		_ = ls.fileDownloader.DownloadAndUnzipRegistryQuiet()
+		refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistryQuiet()
 		localPackages = ls.localPackages.GetData(true).Packages
-		ls.recordDiscoveryPairs(ls.discoveryPairsForInstalled(localPackages))
+		ls.registry.GetData(refreshed)
+		ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
+			return ls.discoveryPairsForInstalled(localPackages)
+		})
 	}
 
 	if ls.shouldShowListPrepSpinner() {
 		_ = spinnerutil.Run("Preparing package list...", prep)
 	} else {
-		_ = ls.fileDownloader.DownloadAndUnzipRegistry()
+		refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistry()
 		localPackages = ls.localPackages.GetData(true).Packages
-		ls.recordDiscoveryPairs(ls.discoveryPairsForInstalled(localPackages))
+		ls.registry.GetData(refreshed)
+		ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
+			return ls.discoveryPairsForInstalled(localPackages)
+		})
 	}
 
 	// Filter packages if name filters are provided
@@ -616,17 +637,21 @@ func (ls *ListService) ListAllPackages(opts ListQueryOptions) {
 	filters := opts.NameFilters
 
 	prep := func() {
-		_ = ls.fileDownloader.DownloadAndUnzipRegistryQuiet()
-		registry = ls.registry.GetData(true)
-		ls.recordDiscoveryPairs(ls.discoveryPairsForRegistry(registry))
+		refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistryQuiet()
+		registry = ls.registry.GetData(refreshed)
+		ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
+			return ls.discoveryPairsForRegistry(registry)
+		})
 	}
 
 	if ls.shouldShowListPrepSpinner() {
 		_ = spinnerutil.Run("Preparing package list...", prep)
 	} else {
-		_ = ls.fileDownloader.DownloadAndUnzipRegistry()
-		registry = ls.registry.GetData(true)
-		ls.recordDiscoveryPairs(ls.discoveryPairsForRegistry(registry))
+		refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistry()
+		registry = ls.registry.GetData(refreshed)
+		ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
+			return ls.discoveryPairsForRegistry(registry)
+		})
 	}
 
 	if len(registry) == 0 {
@@ -641,7 +666,8 @@ func (ls *ListService) ListAllPackages(opts ListQueryOptions) {
 		}
 
 		// Try to download the registry
-		if err := ls.fileDownloader.DownloadAndUnzipRegistry(); err != nil {
+		retriedRefreshed, err := ls.fileDownloader.DownloadAndUnzipRegistry()
+		if err != nil {
 			if ShouldUseJSONOutput() {
 				result := map[string]any{
 					"type":    "all",
@@ -671,6 +697,9 @@ func (ls *ListService) ListAllPackages(opts ListQueryOptions) {
 
 		// Try to get the registry data again
 		registry = ls.registry.GetData(true)
+		ls.recordDiscoveryOnRegistryRefresh(retriedRefreshed, func() []providers.DiscoveryPair {
+			return ls.discoveryPairsForRegistry(registry)
+		})
 
 		if len(registry) == 0 {
 			if ShouldUseJSONOutput() {
@@ -1031,27 +1060,33 @@ func (ls *ListService) checkUpdateAvailability(sourceID, currentVersion string) 
 
 // Default implementations for backward compatibility
 type defaultLocalPackagesProvider struct{}
-type defaultRegistryProvider struct{}
+type defaultRegistryProvider struct {
+	parser *registry_parser.RegistryParser
+}
 type defaultUpdateChecker struct{}
 type defaultFileDownloader struct{}
+
+func (d *defaultRegistryProvider) registryParser() *registry_parser.RegistryParser {
+	if d.parser == nil {
+		d.parser = registry_parser.NewDefaultRegistryParser()
+	}
+	return d.parser
+}
 
 func (d *defaultLocalPackagesProvider) GetData(force bool) local_packages_parser.LocalPackageRoot {
 	return local_packages_parser.GetData(force)
 }
 
 func (d *defaultRegistryProvider) GetData(force bool) []registry_parser.RegistryItem {
-	parser := registry_parser.NewDefaultRegistryParser()
-	return parser.GetData(force)
+	return d.registryParser().GetData(force)
 }
 
 func (d *defaultRegistryProvider) GetLatestVersion(sourceID string) string {
-	parser := registry_parser.NewDefaultRegistryParser()
-	return parser.GetLatestVersion(sourceID)
+	return d.registryParser().GetLatestVersion(sourceID)
 }
 
 func (d *defaultRegistryProvider) GetLatestVersions(sourceID string) (string, string) {
-	parser := registry_parser.NewDefaultRegistryParser()
-	return parser.GetLatestVersions(sourceID)
+	return d.registryParser().GetLatestVersions(sourceID)
 }
 
 func (d *defaultUpdateChecker) CheckIfUpdateIsAvailable(currentVersion, latestVersion string) (bool, string) {
@@ -1064,11 +1099,11 @@ var (
 	downloadAndUnzipRegistryQuietFn = files.DownloadAndUnzipRegistryQuiet
 )
 
-func (d *defaultFileDownloader) DownloadAndUnzipRegistry() error {
+func (d *defaultFileDownloader) DownloadAndUnzipRegistry() (bool, error) {
 	return downloadAndUnzipRegistryFn()
 }
 
-func (d *defaultFileDownloader) DownloadAndUnzipRegistryQuiet() error {
+func (d *defaultFileDownloader) DownloadAndUnzipRegistryQuiet() (bool, error) {
 	return downloadAndUnzipRegistryQuietFn()
 }
 

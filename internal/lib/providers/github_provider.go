@@ -37,7 +37,6 @@ var githubReadDir = os.ReadDir
 var githubHasCommand = shell_out.HasCommand
 
 // Injectable local packages helpers for tests
-var lppGithubAdd = local_packages_parser.AddLocalPackage
 var lppGithubRemove = local_packages_parser.RemoveLocalPackage
 var lppGithubGetDataForProvider = local_packages_parser.GetDataForProvider
 
@@ -219,7 +218,8 @@ func (p *GitHubProvider) installFromRelease(sourceID, repo, version string, regi
 	}
 
 	// Add to local packages
-	if err := lppGithubAdd(sourceID, resolvedVersion); err != nil {
+	repoURL := p.getRepoURL(repo)
+	if err := persistGitHostedPackage(sourceID, resolvedVersion, "", repoURL); err != nil {
 		Logger.Error(fmt.Sprintf("GitHub Install: Error adding package to local packages: %v", err))
 		return false
 	}
@@ -250,7 +250,8 @@ func (p *GitHubProvider) installFromGit(sourceID, repo, version string) bool {
 	}
 
 	// Add to local packages
-	if err := lppGithubAdd(sourceID, resolvedVersion); err != nil {
+	repoURL := p.getRepoURL(repo)
+	if err := persistGitHostedPackage(sourceID, resolvedVersion, repoPath, repoURL); err != nil {
 		Logger.Error(fmt.Sprintf("GitHub Install: Error adding package to local packages: %v", err))
 		return false
 	}

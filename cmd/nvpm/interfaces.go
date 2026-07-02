@@ -27,8 +27,9 @@ type UpdateChecker interface {
 
 // FileDownloader defines the interface for downloading files
 type FileDownloader interface {
-	DownloadAndUnzipRegistry() error
+	// DownloadAndUnzipRegistry returns whether the local registry snapshot was rebuilt.
+	DownloadAndUnzipRegistry() (bool, error)
 	// DownloadAndUnzipRegistryQuiet is like DownloadAndUnzipRegistry but does not show
 	// its own download spinner. Use when the caller already wraps the operation.
-	DownloadAndUnzipRegistryQuiet() error
+	DownloadAndUnzipRegistryQuiet() (bool, error)
 }

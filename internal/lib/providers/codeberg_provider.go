@@ -36,7 +36,6 @@ var codebergReadDir = os.ReadDir
 var codebergHasCommand = shell_out.HasCommand
 
 // Injectable local packages helpers for tests
-var lppCodebergAdd = local_packages_parser.AddLocalPackage
 var lppCodebergRemove = local_packages_parser.RemoveLocalPackage
 var lppCodebergGetDataForProvider = local_packages_parser.GetDataForProvider
 
@@ -187,7 +186,8 @@ func (p *CodebergProvider) installFromRelease(sourceID, repo, version string, re
 	}
 
 	// Add to local packages
-	if err := lppCodebergAdd(sourceID, resolvedVersion); err != nil {
+	repoURL := p.getRepoURL(repo)
+	if err := persistGitHostedPackage(sourceID, resolvedVersion, "", repoURL); err != nil {
 		Logger.Error(fmt.Sprintf("Codeberg Install: Error adding package to local packages: %v", err))
 		return false
 	}
@@ -251,7 +251,7 @@ func (p *CodebergProvider) installFromGit(sourceID, repo, version string) bool {
 	}
 
 	// Add to local packages
-	if err := lppCodebergAdd(sourceID, resolvedVersion); err != nil {
+	if err := persistGitHostedPackage(sourceID, resolvedVersion, repoPath, repoURL); err != nil {
 		Logger.Error(fmt.Sprintf("Codeberg Install: Error adding package to local packages: %v", err))
 		return false
 	}

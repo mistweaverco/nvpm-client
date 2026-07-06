@@ -21,7 +21,7 @@ func TestRootCommand(t *testing.T) {
 
 	// Test that all expected subcommands are added
 	subcommands := rootCmd.Commands()
-	expectedCommands := []string{"env", "health", "info", "install", "list", "remove", "sync", "update"}
+	expectedCommands := []string{"env", "health", "info", "add", "ls", "rm", "sync", "up"}
 
 	// Check that all expected commands exist
 	for _, expected := range expectedCommands {

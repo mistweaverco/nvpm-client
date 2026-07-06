@@ -9,11 +9,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var removeCmd = &cobra.Command{
-	Use:     "remove <pkgId> [pkgId...]",
-	Aliases: []string{"rm", "delete"},
-	Short:   "Remove one or more packages",
-	Long: `Remove one or more packages from supported providers.
+var rmCmd = &cobra.Command{
+	Use:     "rm <pkgId> [pkgId...]",
+	Aliases: []string{"remove", "delete"},
+	Short:   "Removes one or more packages",
+	Long: `Removes one or more packages from supported providers.
 
 Supported package ID formats:
   npm:@prisma/language-server
@@ -25,12 +25,12 @@ Supported package ID formats:
   codeberg:user/repo
 
 Examples:
-  nvpm remove npm:@prisma/language-server
+  nvpm rm npm:@prisma/language-server
   nvpm rm golang:golang.org/x/tools/gopls npm:eslint
-  nvpm delete pypi:black cargo:ripgrep
-  nvpm remove npm:prettier golang:golang.org/x/tools/gopls
-  nvpm remove github:sharkdp/bat
-  nvpm remove gitlab:group/subgroup/myproject`,
+  nvpm rm pypi:black cargo:ripgrep
+  nvpm rm npm:prettier golang:golang.org/x/tools/gopls
+  nvpm rm github:sharkdp/bat
+  nvpm rm gitlab:group/subgroup/myproject`,
 	Args: cobra.MinimumNArgs(1),
 	// Enable shell completion for installed package IDs only.
 	ValidArgsFunction: installedPackageIDCompletion,
@@ -174,7 +174,7 @@ Examples:
 var removeIntegrations []string
 
 func init() {
-	removeCmd.Flags().StringSliceVar(&removeIntegrations, "integrate", nil, "run integration backends cleanup when removing (e.g. --integrate neovim)")
+	rmCmd.Flags().StringSliceVar(&removeIntegrations, "integrate", nil, "run integration backends cleanup when removing (e.g. --integrate neovim)")
 }
 
 // findInstalledPackagesByName searches installed packages for packages matching the given name

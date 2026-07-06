@@ -128,19 +128,19 @@ func (us *UpdateService) updatePackage(sourceID string) bool {
 	return providers.Update(sourceID)
 }
 
-var updateCmd = &cobra.Command{
-	Use:     "update",
-	Aliases: []string{"up"},
+var upCmd = &cobra.Command{
+	Use:     "up",
+	Aliases: []string{"update"},
 	Short:   "Update packages to their latest versions",
 	Long: `Update packages to their latest versions.
 
 Examples:
-  nvpm update npm:eslint
-  nvpm update golang:golang.org/x/tools/gopls npm:prettier
-  nvpm update pypi:black cargo:ripgrep
-  nvpm update github:user/repo gitlab:group/subgroup/project
-  nvpm update --all (update all installed packages)
-  nvpm update --self (update nvpm itself to the latest version)`,
+  nvpm up npm:eslint
+  nvpm up golang:golang.org/x/tools/gopls npm:prettier
+  nvpm up pypi:black cargo:ripgrep
+  nvpm up github:user/repo gitlab:group/subgroup/project
+  nvpm up --all (update all installed packages)
+  nvpm up --self (update nvpm itself to the latest version)`,
 	Args: cobra.MinimumNArgs(0), // Allow no args if --all or --self is used
 	// Enable shell completion for installed package IDs only.
 	ValidArgsFunction: installedPackageIDCompletion,
@@ -294,9 +294,9 @@ Examples:
 }
 
 func init() {
-	updateCmd.Flags().BoolP("all", "A", false, "Update all installed packages to their latest versions")
-	updateCmd.Flags().Bool("self", false, "Update nvpm itself to the latest version")
-	updateCmd.Flags().Bool("force", false, "bypass min-release-age safety checks")
+	upCmd.Flags().BoolP("all", "A", false, "Update all installed packages to their latest versions")
+	upCmd.Flags().Bool("self", false, "Update nvpm itself to the latest version")
+	upCmd.Flags().Bool("force", false, "bypass min-release-age safety checks")
 }
 
 // newUpdateService is a factory to allow test injection

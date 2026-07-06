@@ -33,9 +33,9 @@ func TestUpdateAllPackagesGolden(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevFactory }()
 
-		updateCmd.Flags().Set("all", "true")
-		updateCmd.Run(updateCmd, []string{})
-		updateCmd.Flags().Set("all", "false")
+		upCmd.Flags().Set("all", "true")
+		upCmd.Run(upCmd, []string{})
+		upCmd.Flags().Set("all", "false")
 
 		assert.Contains(t, strings.Join(out.Output, "\n"), "No packages are currently installed")
 	})
@@ -87,9 +87,9 @@ func TestUpdateAllPackagesGolden(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevUpdateService }()
 
-		updateCmd.Flags().Set("all", "true")
-		updateCmd.Run(updateCmd, []string{})
-		updateCmd.Flags().Set("all", "false")
+		upCmd.Flags().Set("all", "true")
+		upCmd.Run(upCmd, []string{})
+		upCmd.Flags().Set("all", "false")
 
 		// Join all output and check for content
 		allOutput := strings.Join(out.Output, "\n")
@@ -146,9 +146,9 @@ func TestUpdateAllPackagesGolden(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevUpdateService }()
 
-		updateCmd.Flags().Set("all", "true")
-		updateCmd.Run(updateCmd, []string{})
-		updateCmd.Flags().Set("all", "false")
+		upCmd.Flags().Set("all", "true")
+		upCmd.Run(upCmd, []string{})
+		upCmd.Flags().Set("all", "false")
 
 		// Join all output and check for content
 		allOutput := strings.Join(out.Output, "\n")
@@ -205,9 +205,9 @@ func TestUpdateAllPackagesGolden(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevUpdateService }()
 
-		updateCmd.Flags().Set("all", "true")
-		updateCmd.Run(updateCmd, []string{})
-		updateCmd.Flags().Set("all", "false")
+		upCmd.Flags().Set("all", "true")
+		upCmd.Run(upCmd, []string{})
+		upCmd.Flags().Set("all", "false")
 
 		allOutput := strings.Join(out.Output, "\n")
 		assert.Contains(t, allOutput, "Found 2 installed packages")
@@ -219,15 +219,15 @@ func TestUpdateAllPackagesGolden(t *testing.T) {
 }
 
 func TestUpdateCommand(t *testing.T) {
-	t.Run("update command structure", func(t *testing.T) {
-		assert.Equal(t, "update", updateCmd.Use)
-		assert.Equal(t, "Update packages to their latest versions", updateCmd.Short)
-		assert.NotEmpty(t, updateCmd.Long)
-		assert.Contains(t, updateCmd.Aliases, "up")
+	t.Run("up command structure", func(t *testing.T) {
+		assert.Equal(t, "up", upCmd.Use)
+		assert.Equal(t, "Update packages to their latest versions", upCmd.Short)
+		assert.NotEmpty(t, upCmd.Long)
+		assert.Contains(t, upCmd.Aliases, "update")
 	})
 
 	t.Run("update command has all flag", func(t *testing.T) {
-		allFlag := updateCmd.Flags().Lookup("all")
+		allFlag := upCmd.Flags().Lookup("all")
 		assert.NotNil(t, allFlag)
 		assert.Equal(t, "all", allFlag.Name)
 		assert.Equal(t, "A", allFlag.Shorthand)
@@ -244,9 +244,9 @@ func TestUpdateCommandRunPaths(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevFactory }()
 
-		updateCmd.SetArgs([]string{})
-		updateCmd.Flags().Set("all", "false")
-		updateCmd.Run(updateCmd, []string{})
+		upCmd.SetArgs([]string{})
+		upCmd.Flags().Set("all", "false")
+		upCmd.Run(upCmd, []string{})
 
 		all := strings.Join(captured.Output, "\n")
 		assert.Contains(t, all, "Please provide package IDs or use --all flag")
@@ -258,7 +258,7 @@ func TestUpdateCommandRunPaths(t *testing.T) {
 		newUpdateService = func() *UpdateService {
 			return NewUpdateServiceWithDependencies(&MockLocalPackagesProvider{}, &MockRegistryProvider{}, &MockUpdateChecker{}, out1)
 		}
-		updateCmd.Run(updateCmd, []string{"invalid:id"})
+		upCmd.Run(upCmd, []string{"invalid:id"})
 		assert.Contains(t, strings.Join(out1.Output, "\n"), "Unsupported provider")
 
 		// Missing provider/package
@@ -266,7 +266,7 @@ func TestUpdateCommandRunPaths(t *testing.T) {
 		newUpdateService = func() *UpdateService {
 			return NewUpdateServiceWithDependencies(&MockLocalPackagesProvider{}, &MockRegistryProvider{}, &MockUpdateChecker{}, out2)
 		}
-		updateCmd.Run(updateCmd, []string{"pkg:only"})
+		upCmd.Run(upCmd, []string{"pkg:only"})
 		assert.Contains(t, strings.Join(out2.Output, "\n"), "invalid package ID format")
 
 		// Unsupported provider
@@ -274,7 +274,7 @@ func TestUpdateCommandRunPaths(t *testing.T) {
 		newUpdateService = func() *UpdateService {
 			return NewUpdateServiceWithDependencies(&MockLocalPackagesProvider{}, &MockRegistryProvider{}, &MockUpdateChecker{}, out3)
 		}
-		updateCmd.Run(updateCmd, []string{"pkg:unknown/pkg"})
+		upCmd.Run(upCmd, []string{"pkg:unknown/pkg"})
 		assert.Contains(t, strings.Join(out3.Output, "\n"), "Unsupported provider")
 	})
 
@@ -294,7 +294,7 @@ func TestUpdateCommandRunPaths(t *testing.T) {
 		newUpdateService = func() *UpdateService {
 			return NewUpdateServiceWithDependencies(&MockLocalPackagesProvider{}, &MockRegistryProvider{}, &MockUpdateChecker{}, out)
 		}
-		updateCmd.Run(updateCmd, []string{"pkg:npm/eslint"})
+		upCmd.Run(upCmd, []string{"pkg:npm/eslint"})
 		assert.Contains(t, strings.Join(out.Output, "\n"), "[✓] Successfully updated npm:eslint")
 	})
 
@@ -319,7 +319,7 @@ func TestUpdateCommandRunPaths(t *testing.T) {
 		newUpdateService = func() *UpdateService {
 			return NewUpdateServiceWithDependencies(&MockLocalPackagesProvider{}, &MockRegistryProvider{}, &MockUpdateChecker{}, out)
 		}
-		updateCmd.Run(updateCmd, []string{"pkg:npm/eslint", "pkg:pypi/black"})
+		upCmd.Run(upCmd, []string{"pkg:npm/eslint", "pkg:pypi/black"})
 		allOutput := strings.Join(out.Output, "\n")
 		assert.Contains(t, allOutput, "[✓] Successfully updated npm:eslint")
 		assert.Contains(t, allOutput, "[✓] Successfully updated pypi:black")
@@ -339,9 +339,9 @@ func TestUpdateCommandRunPaths(t *testing.T) {
 				out,
 			)
 		}
-		updateCmd.Flags().Set("all", "true")
-		updateCmd.Run(updateCmd, []string{})
-		updateCmd.Flags().Set("all", "false")
+		upCmd.Flags().Set("all", "true")
+		upCmd.Run(upCmd, []string{})
+		upCmd.Flags().Set("all", "false")
 		assert.Contains(t, strings.Join(out.Output, "\n"), "Updating all installed packages to latest versions...")
 	})
 }
@@ -432,9 +432,9 @@ func TestUpdateCommandFullOutputGolden(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevUpdateService }()
 
-		updateCmd.Flags().Set("all", "true")
-		updateCmd.Run(updateCmd, []string{})
-		updateCmd.Flags().Set("all", "false")
+		upCmd.Flags().Set("all", "true")
+		upCmd.Run(upCmd, []string{})
+		upCmd.Flags().Set("all", "false")
 
 		allOutput := strings.Join(out.Output, "\n")
 		assert.Contains(t, allOutput, "Found 3 installed packages")
@@ -491,9 +491,9 @@ func TestUpdateCommandFullOutputGolden(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevUpdateService }()
 
-		updateCmd.Flags().Set("all", "true")
-		updateCmd.Run(updateCmd, []string{})
-		updateCmd.Flags().Set("all", "false")
+		upCmd.Flags().Set("all", "true")
+		upCmd.Run(upCmd, []string{})
+		upCmd.Flags().Set("all", "false")
 
 		allOutput := strings.Join(out.Output, "\n")
 		assert.Contains(t, allOutput, "Found 2 installed packages")
@@ -543,9 +543,9 @@ func TestUpdateCommandFullOutputGolden(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevUpdateService }()
 
-		updateCmd.Flags().Set("all", "true")
-		updateCmd.Run(updateCmd, []string{})
-		updateCmd.Flags().Set("all", "false")
+		upCmd.Flags().Set("all", "true")
+		upCmd.Run(upCmd, []string{})
+		upCmd.Flags().Set("all", "false")
 
 		allOutput := strings.Join(out.Output, "\n")
 		assert.Contains(t, allOutput, "Found 1 installed packages")
@@ -573,7 +573,7 @@ func TestUpdateCommandFullOutputGolden(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevUpdateService }()
 
-		updateCmd.Run(updateCmd, []string{"pkg:npm/eslint"})
+		upCmd.Run(upCmd, []string{"pkg:npm/eslint"})
 
 		allOutput := strings.Join(out.Output, "\n")
 		assert.Contains(t, allOutput, "[✗] Failed to update npm:eslint")
@@ -598,7 +598,7 @@ func TestUpdateCommandFullOutputGolden(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevUpdateService }()
 
-		updateCmd.Run(updateCmd, []string{"pkg:npm/eslint"})
+		upCmd.Run(upCmd, []string{"pkg:npm/eslint"})
 
 		allOutput := strings.Join(out.Output, "\n")
 		assert.Contains(t, allOutput, "[✓] Successfully updated npm:eslint")
@@ -628,7 +628,7 @@ func TestUpdateCommandFullOutputGolden(t *testing.T) {
 		}
 		defer func() { newUpdateService = prevUpdateService }()
 
-		updateCmd.Run(updateCmd, []string{"pkg:npm/eslint", "pkg:pypi/black"})
+		upCmd.Run(upCmd, []string{"pkg:npm/eslint", "pkg:pypi/black"})
 
 		allOutput := strings.Join(out.Output, "\n")
 		assert.Contains(t, allOutput, "[✓] Successfully updated npm:eslint")

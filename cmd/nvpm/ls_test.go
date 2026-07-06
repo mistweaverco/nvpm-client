@@ -805,15 +805,15 @@ func TestCheckUpdateAvailability(t *testing.T) {
 }
 
 func TestListCommand(t *testing.T) {
-	t.Run("list command structure", func(t *testing.T) {
-		assert.Contains(t, listCmd.Use, "list")
-		assert.Equal(t, "List packages", listCmd.Short)
-		assert.NotEmpty(t, listCmd.Long)
-		assert.Contains(t, listCmd.Aliases, "ls")
+	t.Run("ls command structure", func(t *testing.T) {
+		assert.Contains(t, lsCmd.Use, "ls")
+		assert.Equal(t, "List packages", lsCmd.Short)
+		assert.NotEmpty(t, lsCmd.Long)
+		assert.Contains(t, lsCmd.Aliases, "list")
 	})
 
 	t.Run("list command has all flag", func(t *testing.T) {
-		allFlag := listCmd.Flags().Lookup("all")
+		allFlag := lsCmd.Flags().Lookup("all")
 		assert.NotNil(t, allFlag)
 		assert.Equal(t, "all", allFlag.Name)
 		assert.Equal(t, "A", allFlag.Shorthand)
@@ -821,9 +821,9 @@ func TestListCommand(t *testing.T) {
 	})
 
 	t.Run("list command has filter flags", func(t *testing.T) {
-		assert.NotNil(t, listCmd.Flags().Lookup("only-outdated"))
-		assert.NotNil(t, listCmd.Flags().Lookup("only-providers"))
-		assert.NotNil(t, listCmd.Flags().Lookup("only-categories"))
+		assert.NotNil(t, lsCmd.Flags().Lookup("only-outdated"))
+		assert.NotNil(t, lsCmd.Flags().Lookup("only-providers"))
+		assert.NotNil(t, lsCmd.Flags().Lookup("only-categories"))
 	})
 }
 
@@ -850,8 +850,8 @@ func TestListCommandRunPaths(t *testing.T) {
 		r, w, _ := os.Pipe()
 		os.Stdout = w
 
-		listCmd.SetArgs([]string{})
-		listCmd.Run(listCmd, []string{})
+		lsCmd.SetArgs([]string{})
+		lsCmd.Run(lsCmd, []string{})
 
 		// Restore
 		w.Close()
@@ -879,9 +879,9 @@ func TestListCommandRunPaths(t *testing.T) {
 		r, w, _ := os.Pipe()
 		os.Stdout = w
 
-		listCmd.Flags().Set("all", "true")
-		listCmd.Run(listCmd, []string{})
-		listCmd.Flags().Set("all", "false")
+		lsCmd.Flags().Set("all", "true")
+		lsCmd.Run(lsCmd, []string{})
+		lsCmd.Flags().Set("all", "false")
 
 		w.Close()
 		os.Stdout = old

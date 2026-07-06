@@ -199,12 +199,12 @@ nvpm show \
   golang:golangci-lint
 ```
 
-#### nvpm install
+#### nvpm add
 
-`install`/`add` install packages
+`add`/`install` add packages
 
 ```sh
-nvpm install \
+nvpm add \
   npm:@mistweavercokulala-ls@0.1.0 \
   pypi:black \
   golang:golangci-lint
@@ -257,18 +257,18 @@ ui:
 
 A JSON Schema is provided at `schemas/config.schema.json`.
 
-#### nvpm list
+#### nvpm ls
 
-`list`/`ls` list all installed packages.
+`ls`/`list` list all installed packages.
 
 ```sh
-nvpm list
+nvpm ls
 ```
 
 or with `--all`/`-A` flag all available packages.
 
 ```sh
-nvpm list --all
+nvpm ls --all
 ```
 
 You can also filter packages by
@@ -276,7 +276,7 @@ prefix of either the package id or name.
 
 ```sh
  # lists all available packages with "yaml" in the name
-nvpm list -A yaml
+nvpm ls -A yaml
 ```
 
 Optional list constraints (combinable with each other and with name filters):
@@ -291,17 +291,17 @@ Optional list constraints (combinable with each other and with name filters):
   case-insensitive), for example `lsp,tree-sitter-parser`.
 
 ```sh
-nvpm list --only-outdated
-nvpm list --only-providers pypi --only-categories lsp
-nvpm list -A --only-providers npm --only-outdated
+nvpm ls --only-outdated
+nvpm ls --only-providers pypi --only-categories lsp
+nvpm ls -A --only-providers npm --only-outdated
 ```
 
-#### nvpm update
+#### nvpm up
 
-`update`/`up` updates packages.
+`up`/`update` updates packages.
 
 ```sh
-nvpm update \
+nvpm up \
   npm:@mistweavercokulala-ls \
   pypi:black@latest
 ```
@@ -309,7 +309,7 @@ nvpm update \
 You can also update all packages at once with the `--all`/`-A` flag.
 
 ```sh
-nvpm update --all
+nvpm up --all
 ```
 
 or filter packages by
@@ -317,18 +317,18 @@ prefix of either the package id or name.
 
 ```sh
  # updates all installed packages with "yaml" in the name
-nvpm update -A yaml
+nvpm up -A yaml
 ```
 
 NVPM can also update itself with:
 
 ```sh
-nvpm update --self
+nvpm up --self
 ```
 
-#### nvpm remove
+#### nvpm rm
 
-`remove`/`rm` removes packages.
+`rm`/`remove` removes packages.
 
 ```sh
 nvpm remove \
@@ -341,7 +341,7 @@ prefix of either the package id or name.
 
 ```sh
  # removes all installed packages with "yaml" in the name
-nvpm remove -A yaml
+nvpm rm -A yaml
 ```
 
 #### nvpm health
@@ -389,7 +389,7 @@ By default, NVPM only builds and caches the parser artifacts under:
 To install built parsers into Neovim, use:
 
 ```sh
-nvpm install --integrate neovim <package>
+nvpm add --integrate neovim <package>
 ```
 
 NVPM resolves `<stdpath("data")>` by running Neovim headless when available

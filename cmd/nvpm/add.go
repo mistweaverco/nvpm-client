@@ -93,11 +93,11 @@ func validatePackageArgs(args []string) error {
 	return nil
 }
 
-var installCmd = &cobra.Command{
-	Use:     "install <pkgId> [pkgId...]",
-	Aliases: []string{"add"},
-	Short:   "Install one or more packages",
-	Long: `Install one or more packages from supported providers.
+var addCmd = &cobra.Command{
+	Use:     "add <pkgId> [pkgId...]",
+	Aliases: []string{"install"},
+	Short:   "Adds one or more packages",
+	Long: `Adds one or more packages from supported providers.
 
 Supported package ID formats:
   npm:@prisma/language-server
@@ -392,9 +392,9 @@ var installExternalTreeSitterQueries string
 var installForce bool
 
 func init() {
-	installCmd.Flags().StringSliceVar(&installIntegrations, "integrate", nil, "run integration backends after install (e.g. --integrate neovim)")
-	installCmd.Flags().StringVar(&installExternalTreeSitterQueries, "external-treesitter-queries", "ask", "when Neovim integration needs optional query-only git repos from the registry: ask (default), always, never (overridden by NVPM_EXTERNAL_TREESITTER_QUERIES when this flag is left at default)")
-	installCmd.Flags().BoolVar(&installForce, "force", false, "bypass min-release-age safety checks")
+	addCmd.Flags().StringSliceVar(&installIntegrations, "integrate", nil, "run integration backends after install (e.g. --integrate neovim)")
+	addCmd.Flags().StringVar(&installExternalTreeSitterQueries, "external-treesitter-queries", "ask", "when Neovim integration needs optional query-only git repos from the registry: ask (default), always, never (overridden by NVPM_EXTERNAL_TREESITTER_QUERIES when this flag is left at default)")
+	addCmd.Flags().BoolVar(&installForce, "force", false, "bypass min-release-age safety checks")
 }
 
 // indirections for testability

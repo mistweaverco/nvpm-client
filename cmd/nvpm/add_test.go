@@ -13,13 +13,13 @@ import (
 
 func TestInstallCommand(t *testing.T) {
 	// Test that install command is properly configured
-	assert.Contains(t, installCmd.Use, "install")
-	assert.Contains(t, installCmd.Short, "Install one or more packages")
-	assert.Contains(t, installCmd.Long, "Install one or more packages from supported providers")
+	assert.Contains(t, addCmd.Use, "add")
+	assert.Contains(t, addCmd.Short, "Adds one or more packages")
+	assert.Contains(t, addCmd.Long, "Adds one or more packages from supported providers")
 
 	// Test aliases
-	aliases := installCmd.Aliases
-	assert.Contains(t, aliases, "add")
+	aliases := addCmd.Aliases
+	assert.Contains(t, aliases, "install")
 	assert.Len(t, aliases, 1)
 }
 
@@ -215,14 +215,6 @@ func TestInstallCommandExamples(t *testing.T) {
 	}
 }
 
-func TestInstallCommandHelp(t *testing.T) {
-	// Test that help command works without executing the actual command
-	// We'll just test the command structure instead
-	assert.NotNil(t, installCmd)
-	assert.Contains(t, installCmd.Use, "install")
-	assert.Contains(t, installCmd.Short, "Install one or more packages")
-}
-
 func TestInstallCommandIntegration(t *testing.T) {
 	// Test that the command structure is correct without executing
 	// This avoids hanging on actual command execution
@@ -243,8 +235,8 @@ func TestInstallCommandIntegration(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Just test that the command can be set up without panicking
 			// Don't actually execute it
-			assert.NotNil(t, installCmd)
-			assert.NotNil(t, installCmd.Run)
+			assert.NotNil(t, addCmd)
+			assert.NotNil(t, addCmd.Run)
 		})
 	}
 }
@@ -252,7 +244,7 @@ func TestInstallCommandIntegration(t *testing.T) {
 func TestInstallCommandRunPaths(t *testing.T) {
 	t.Run("invalid id format", func(t *testing.T) {
 		// capture output indirectly by ensuring no panic and path returns early
-		installCmd.Run(installCmd, []string{"invalid"})
+		addCmd.Run(addCmd, []string{"invalid"})
 	})
 
 	t.Run("unsupported provider", func(t *testing.T) {
@@ -261,7 +253,7 @@ func TestInstallCommandRunPaths(t *testing.T) {
 		isSupportedProviderFn = func(p string) bool { return false }
 		availableProvidersFn = func() []string { return []string{"npm"} }
 		defer func() { isSupportedProviderFn = prev; availableProvidersFn = prevAvail }()
-		installCmd.Run(installCmd, []string{"pkg:unknown/x"})
+		addCmd.Run(addCmd, []string{"pkg:unknown/x"})
 	})
 
 	t.Run("successful install single package", func(t *testing.T) {
@@ -270,7 +262,7 @@ func TestInstallCommandRunPaths(t *testing.T) {
 		isSupportedProviderFn = func(p string) bool { return true }
 		installPackageFn = func(id, v string) bool { return true }
 		defer func() { isSupportedProviderFn = prevSupp; installPackageFn = prevInstall }()
-		installCmd.Run(installCmd, []string{"pkg:npm/eslint"})
+		addCmd.Run(addCmd, []string{"pkg:npm/eslint"})
 	})
 
 	t.Run("successful install multiple packages", func(t *testing.T) {
@@ -279,7 +271,7 @@ func TestInstallCommandRunPaths(t *testing.T) {
 		isSupportedProviderFn = func(p string) bool { return true }
 		installPackageFn = func(id, v string) bool { return true }
 		defer func() { isSupportedProviderFn = prevSupp; installPackageFn = prevInstall }()
-		installCmd.Run(installCmd, []string{"pkg:npm/eslint", "pkg:pypi/black"})
+		addCmd.Run(addCmd, []string{"pkg:npm/eslint", "pkg:pypi/black"})
 	})
 
 	t.Run("failed install single package", func(t *testing.T) {
@@ -288,7 +280,7 @@ func TestInstallCommandRunPaths(t *testing.T) {
 		isSupportedProviderFn = func(p string) bool { return true }
 		installPackageFn = func(id, v string) bool { return false }
 		defer func() { isSupportedProviderFn = prevSupp; installPackageFn = prevInstall }()
-		installCmd.Run(installCmd, []string{"pkg:npm/eslint"})
+		addCmd.Run(addCmd, []string{"pkg:npm/eslint"})
 	})
 
 	t.Run("mixed success/failure multiple packages", func(t *testing.T) {
@@ -303,7 +295,7 @@ func TestInstallCommandRunPaths(t *testing.T) {
 			return false
 		}
 		defer func() { isSupportedProviderFn = prevSupp; installPackageFn = prevInstall }()
-		installCmd.Run(installCmd, []string{"pkg:npm/eslint", "pkg:pypi/black"})
+		addCmd.Run(addCmd, []string{"pkg:npm/eslint", "pkg:pypi/black"})
 	})
 }
 
@@ -324,19 +316,19 @@ func TestInstallCommandErrorHandling(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Just test that the command structure is valid
 			// Don't actually execute it
-			assert.NotNil(t, installCmd)
-			assert.NotNil(t, installCmd.Run)
+			assert.NotNil(t, addCmd)
+			assert.NotNil(t, addCmd.Run)
 		})
 	}
 }
 
 func TestInstallCommandStructure(t *testing.T) {
 	// Test that the command has the expected structure
-	assert.NotNil(t, installCmd.Run, "Install command should have a Run function")
-	assert.NotEmpty(t, installCmd.Use, "Install command should have a Use field")
-	assert.NotEmpty(t, installCmd.Short, "Install command should have a Short description")
-	assert.NotEmpty(t, installCmd.Long, "Install command should have a Long description")
-	assert.NotEmpty(t, installCmd.Aliases, "Install command should have aliases")
+	assert.NotNil(t, addCmd.Run, "Install command should have a Run function")
+	assert.NotEmpty(t, addCmd.Use, "Install command should have a Use field")
+	assert.NotEmpty(t, addCmd.Short, "Install command should have a Short description")
+	assert.NotEmpty(t, addCmd.Long, "Install command should have a Long description")
+	assert.NotEmpty(t, addCmd.Aliases, "Install command should have aliases")
 }
 
 func TestInstallCommandProviderIntegration(t *testing.T) {
@@ -384,7 +376,7 @@ func TestInstallCommandFullOutputGolden(t *testing.T) {
 			resolveVersionFn = prevResolve
 		}()
 
-		installCmd.Run(installCmd, []string{"pkg:npm/eslint", "pkg:npm/prettier"})
+		addCmd.Run(addCmd, []string{"pkg:npm/eslint", "pkg:npm/prettier"})
 
 		// Restore stdout and read
 		w.Close()
@@ -421,7 +413,7 @@ func TestInstallCommandFullOutputGolden(t *testing.T) {
 			resolveVersionFn = prevResolve
 		}()
 
-		installCmd.Run(installCmd, []string{"pkg:npm/eslint@2.0.0", "pkg:pypi/black@22.3.0"})
+		addCmd.Run(addCmd, []string{"pkg:npm/eslint@2.0.0", "pkg:pypi/black@22.3.0"})
 
 		// Restore stdout and read
 		w.Close()
@@ -462,7 +454,7 @@ func TestInstallCommandFullOutputGolden(t *testing.T) {
 			resolveVersionFn = prevResolve
 		}()
 
-		installCmd.Run(installCmd, []string{"pkg:npm/eslint", "pkg:pypi/black"})
+		addCmd.Run(addCmd, []string{"pkg:npm/eslint", "pkg:pypi/black"})
 
 		// Restore stdout and read
 		w.Close()

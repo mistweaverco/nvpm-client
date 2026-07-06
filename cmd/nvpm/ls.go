@@ -62,9 +62,9 @@ func NewListServiceWithDependencies(
 	}
 }
 
-var listCmd = &cobra.Command{
-	Use:     "list [filter...]",
-	Aliases: []string{"ls"},
+var lsCmd = &cobra.Command{
+	Use:     "ls [filter...]",
+	Aliases: []string{"list"},
 	Short:   "List packages",
 	Long: `List packages based on the specified options.
 
@@ -94,10 +94,10 @@ Optional filters (combinable): --only-outdated, --only-providers, --only-categor
 }
 
 func init() {
-	listCmd.Flags().BoolP("all", "A", false, "List all available packages from the registry")
-	listCmd.Flags().Bool("only-outdated", false, "Show only packages with an update available (with --all: registry entries you have installed that are outdated)")
-	listCmd.Flags().String("only-providers", "", "Comma-separated provider names to include, e.g. pypi,npm")
-	listCmd.Flags().String("only-categories", "", "Comma-separated category tokens; a package matches if any of its registry categories matches any token (substring match, case-insensitive), e.g. lsp,tree-sitter-parser")
+	lsCmd.Flags().BoolP("all", "A", false, "List all available packages from the registry")
+	lsCmd.Flags().Bool("only-outdated", false, "Show only packages with an update available (with --all: registry entries you have installed that are outdated)")
+	lsCmd.Flags().String("only-providers", "", "Comma-separated provider names to include, e.g. pypi,npm")
+	lsCmd.Flags().String("only-categories", "", "Comma-separated category tokens; a package matches if any of its registry categories matches any token (substring match, case-insensitive), e.g. lsp,tree-sitter-parser")
 }
 
 // ListQueryOptions holds positional name filters plus optional list constraints.

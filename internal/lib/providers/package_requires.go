@@ -156,7 +156,7 @@ func ensurePackageRequires(registryItem registry_parser.RegistryItem, autoInstal
 		return nil
 	}
 	reg := packageRequiresNewRegistry()
-	order, err := requiresInstallOrder(registryItem.Source.ID, reg, autoInstall)
+	order, err := requiresInstallOrderForItem(registryItem, reg, autoInstall)
 	if err != nil {
 		return err
 	}
@@ -189,6 +189,34 @@ func ensurePackageRequires(registryItem registry_parser.RegistryItem, autoInstal
 		}
 	}
 	return installRequiredPackages(order, reg)
+}
+
+// requiresInstallOrderForItem returns transitive registry requires for a concrete registry item,
+// in install-first order. Unlike requiresInstallOrder(sourceID,...), this does not require the
+// root package to exist in the registry index (callers already have its RegistryItem).
+func requiresInstallOrderForItem(item registry_parser.RegistryItem, reg *registry_parser.RegistryParser, autoInstall bool) ([]string, error) {
+	if item.Source.ID == "" || item.Requires == nil || item.Requires.IsEmpty() {
+		return nil, nil
+	}
+	resolving := map[string]bool{}
+	resolved := map[string]bool{}
+	var order []string
+
+	deps, err := expandRegistryRequires(item.Requires, reg, autoInstall)
+	if err != nil {
+		return nil, err
+	}
+	for _, depID := range deps {
+		if _, err := collectRequiresInstallOrder(depID, reg, autoInstall, resolving, resolved, &order); err != nil {
+			return nil, err
+		}
+		if resolved[depID] {
+			continue
+		}
+		order = append(order, depID)
+		resolved[depID] = true
+	}
+	return order, nil
 }
 
 func installRequiredPackages(order []string, reg *registry_parser.RegistryParser) error {

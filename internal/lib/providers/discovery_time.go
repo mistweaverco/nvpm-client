@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
@@ -80,6 +82,11 @@ type DiscoveryPair struct {
 	Commit string
 }
 
+type DiscoveredVersion struct {
+	Version   string    `json:"version"`
+	FirstSeen time.Time `json:"first_seen"`
+}
+
 func RecordDiscovery(sourceID, version string) error {
 	_, err := getOrSetFirstSeen(sourceID, version, time.Now())
 	return err
@@ -116,6 +123,52 @@ func RecordDiscoveryBatch(pairs []DiscoveryPair) error {
 		return nil
 	}
 	return writeDiscoveryDB(db)
+}
+
+// GetFirstSeen returns the discovery time for (sourceID, version) if present.
+// Unlike getOrSetFirstSeen, this is a read-only query and does not write the DB.
+func GetFirstSeen(sourceID, version string) (time.Time, bool, error) {
+	db, err := readDiscoveryDB()
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	k := discoveryKey(sourceID, version)
+	if unix, ok := db.FirstSeenUnix[k]; ok && unix > 0 {
+		return time.Unix(unix, 0), true, nil
+	}
+	return time.Time{}, false, nil
+}
+
+// ListDiscoveredVersions returns all recorded versions for a given sourceID,
+// sorted by most-recent first.
+func ListDiscoveredVersions(sourceID string) ([]DiscoveredVersion, error) {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return nil, nil
+	}
+	db, err := readDiscoveryDB()
+	if err != nil {
+		return nil, err
+	}
+	prefix := sourceID + "@"
+	out := make([]DiscoveredVersion, 0, 16)
+	for k, unix := range db.FirstSeenUnix {
+		if unix <= 0 || !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		ver := strings.TrimPrefix(k, prefix)
+		if ver == "" {
+			continue
+		}
+		out = append(out, DiscoveredVersion{
+			Version:   ver,
+			FirstSeen: time.Unix(unix, 0),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].FirstSeen.After(out[j].FirstSeen)
+	})
+	return out, nil
 }
 
 // getOrSetFirstSeen returns the first discovery time for (sourceID, version),

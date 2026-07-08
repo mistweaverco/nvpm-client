@@ -27,7 +27,7 @@ func listDiscoveryTestService(refreshed bool) *ListService {
 			},
 		},
 		&MockRegistryProvider{
-			GetLatestVersionsFunc: func(string) (string, string) { return "9.0.0", "" },
+			GetLatestVersionsFunc: func(string) (string, string) { return "9.0.0", "9.1.0-rc.1" },
 		},
 		&MockUpdateChecker{},
 		&MockFileDownloader{
@@ -102,6 +102,8 @@ func TestRecordDiscoveryOnRegistryRefreshRecordsAfterRefresh(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(b, &db))
 	_, ok := db.FirstSeenUnix["npm:eslint@9.0.0"]
+	assert.True(t, ok)
+	_, ok = db.FirstSeenUnix["npm:eslint@9.1.0-rc.1"]
 	assert.True(t, ok)
 }
 

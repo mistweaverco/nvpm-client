@@ -34,6 +34,15 @@ func FormatGitDiscoveryVersion(tag, commit string) string {
 	return tag
 }
 
+// FormatGitDiscoveryVersionForRef formats the discovery-time version string from a user-facing ref
+// (tag/branch/SHA) plus a resolved commit SHA.
+//
+// - For commit-only refs, this returns the commit SHA (not "sha+sha").
+// - For tag/branch refs, this returns "ref+commit".
+func FormatGitDiscoveryVersionForRef(ref, commit string) string {
+	return FormatGitDiscoveryVersion(gitTagForDiscoveryRef(ref), strings.TrimSpace(commit))
+}
+
 func isGitCommitSHA(s string) bool {
 	if len(s) < 7 || len(s) > 40 {
 		return false

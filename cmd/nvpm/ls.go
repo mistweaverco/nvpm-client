@@ -351,10 +351,18 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 	stable, prerelease := ls.registry.GetLatestVersions(sourceID)
 	avail := make([]string, 0, 2)
 	if v := strings.TrimSpace(stable); v != "" && v != "latest" {
-		avail = append(avail, v)
+		if providers.IsGitCommitHash(v) {
+			avail = append(avail, v[:7])
+		} else {
+			avail = append(avail, v)
+		}
 	}
 	if v := strings.TrimSpace(prerelease); v != "" && v != "latest" && v != stable {
-		avail = append(avail, v)
+		if providers.IsGitCommitHash(v) {
+			avail = append(avail, v[:7])
+		} else {
+			avail = append(avail, v)
+		}
 	}
 
 	// Git-hosted packages use discovery keys that include the commit SHA ("tag+commit" or "commit").
@@ -415,7 +423,11 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 				continue
 			}
 
-			out.Discovered = append(out.Discovered, v)
+			version := v
+			if providers.IsGitCommitHash(version) {
+				version = version[:7]
+			}
+			out.Discovered = append(out.Discovered, version)
 
 			// If the user already has this exact ref pinned (same tag + same commit),
 			// it is not an install candidate; don't show it as eligible.
@@ -425,9 +437,9 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 
 			age := now.Sub(foundFirstSeen)
 			if minAge <= 0 || age >= minAge {
-				out.Eligible = append(out.Eligible, v)
+				out.Eligible = append(out.Eligible, version)
 			} else {
-				out.EligibleSoon = append(out.EligibleSoon, v)
+				out.EligibleSoon = append(out.EligibleSoon, version)
 			}
 		}
 		return out
@@ -443,16 +455,21 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 
 	out := discoveryDisplay{Available: avail}
 	for _, dv := range discovered {
+		version := dv.Version
+		if providers.IsGitCommitHash(version) {
+			version = dv.Version[:7]
+		}
 		// Always show what's been recorded, even if it's not newer than installed.
-		out.Discovered = append(out.Discovered, dv.Version)
+		out.Discovered = append(out.Discovered, version)
 
 		// Eligibility is only meaningful for versions newer than what's installed.
 		if shouldRecordDiscoveredVersion(installedVersion, dv.Version) {
+			// If Version is a git commit hash, we truncate to 7 characters
 			age := now.Sub(dv.FirstSeen)
 			if minAge <= 0 || age >= minAge {
-				out.Eligible = append(out.Eligible, dv.Version)
+				out.Eligible = append(out.Eligible, version)
 			} else {
-				out.EligibleSoon = append(out.EligibleSoon, dv.Version)
+				out.EligibleSoon = append(out.EligibleSoon, version)
 			}
 		}
 	}
@@ -532,6 +549,13 @@ func (ls *ListService) ListInstalledPackages(opts ListQueryOptions) {
 		ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
 			return ls.discoveryPairsForInstalled(localPackages)
 		})
+	}
+
+	// Truncate git commit hashes to 7 characters for display
+	for idx, pkg := range localPackages {
+		if providers.IsGitCommitHash(pkg.Version) {
+			localPackages[idx].Version = pkg.Version[:7]
+		}
 	}
 
 	// Filter packages if name filters are provided

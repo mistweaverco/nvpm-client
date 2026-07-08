@@ -8,6 +8,19 @@ import (
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 )
 
+// IsGitCommitHash checks if a string is a valid Git commit hash (40 hexadecimal characters)
+func IsGitCommitHash(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
 // DetectRegistryTarget detects the current platform and returns the registry target string
 // Registry targets: darwin_arm64, darwin_x64, linux_x64, linux_arm64, linux_arm, win_x64, etc.
 func DetectRegistryTarget() string {

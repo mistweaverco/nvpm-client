@@ -5,6 +5,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/x/term"
@@ -12,6 +13,7 @@ import (
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/providers"
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/semver"
 	"github.com/mistweaverco/nvpm-client/internal/lib/spinnerutil"
 	"github.com/spf13/cobra"
 )
@@ -256,27 +258,212 @@ func (ls *ListService) discoveryPairsForInstalled(localPackages []local_packages
 	if cfg.Flags.MinReleaseAge <= 0 || len(localPackages) == 0 {
 		return nil
 	}
-	pairs := make([]providers.DiscoveryPair, 0, len(localPackages))
+	pairs := make([]providers.DiscoveryPair, 0, len(localPackages)*2)
 	for _, pkg := range localPackages {
 		stable, prerelease := ls.registry.GetLatestVersions(pkg.SourceID)
 		if stable == "" && prerelease == "" {
 			continue
 		}
-		latest := chooseBestRemoteVersion(pkg.Version, stable, prerelease)
-		if latest == "" || latest == "latest" {
-			continue
+
+		candidates := make([]string, 0, 2)
+		if stable != "" && stable != "latest" && shouldRecordDiscoveredVersion(pkg.Version, stable) {
+			candidates = append(candidates, stable)
 		}
-		pair := providers.DiscoveryPair{SourceID: pkg.SourceID, Version: latest}
-		if providers.IsGitHostedSourceID(pkg.SourceID) {
-			commit, err := providers.ResolveGitDiscoveryCommit(pkg.SourceID, latest)
-			if err != nil {
-				continue
+		if prerelease != "" && prerelease != "latest" && prerelease != stable && shouldRecordDiscoveredVersion(pkg.Version, prerelease) {
+			candidates = append(candidates, prerelease)
+		}
+
+		for _, v := range candidates {
+			pair := providers.DiscoveryPair{SourceID: pkg.SourceID, Version: v}
+			if providers.IsGitHostedSourceID(pkg.SourceID) {
+				commit, err := providers.ResolveGitDiscoveryCommit(pkg.SourceID, v)
+				if err != nil {
+					continue
+				}
+				pair.Commit = commit
 			}
-			pair.Commit = commit
+			pairs = append(pairs, pair)
 		}
-		pairs = append(pairs, pair)
 	}
 	return pairs
+}
+
+func shouldRecordDiscoveredVersion(installedVersion, candidate string) bool {
+	installedVersion = strings.TrimSpace(installedVersion)
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || candidate == "latest" {
+		return false
+	}
+	if installedVersion == "" || installedVersion == "latest" {
+		return true
+	}
+	return semver.IsGreater(installedVersion, candidate)
+}
+
+type discoveryDisplay struct {
+	Available    []string
+	Discovered   []string
+	Eligible     []string
+	EligibleSoon []string
+}
+
+type gitDiscoveredRef struct {
+	Ref       string
+	Commit    string
+	FirstSeen time.Time
+}
+
+func parseGitDiscoveryKeyVersion(version string) (ref string, commit string) {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return "", ""
+	}
+	// Stored git discovery key formats:
+	// - "tag+commit" (preferred)
+	// - "commit" (commit-only installs)
+	if idx := strings.Index(version, "+"); idx > 0 && idx < len(version)-1 {
+		return strings.TrimSpace(version[:idx]), strings.TrimSpace(version[idx+1:])
+	}
+	return "", version
+}
+
+func (ls *ListService) gitDiscoveredRefsFromDB(sourceID string) ([]gitDiscoveredRef, error) {
+	vers, err := providers.ListDiscoveredVersions(sourceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]gitDiscoveredRef, 0, len(vers))
+	for _, dv := range vers {
+		ref, commit := parseGitDiscoveryKeyVersion(dv.Version)
+		if commit == "" {
+			continue
+		}
+		out = append(out, gitDiscoveredRef{
+			Ref:       ref,
+			Commit:    commit,
+			FirstSeen: dv.FirstSeen,
+		})
+	}
+	return out, nil
+}
+
+func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, installedCommit string) discoveryDisplay {
+	stable, prerelease := ls.registry.GetLatestVersions(sourceID)
+	avail := make([]string, 0, 2)
+	if v := strings.TrimSpace(stable); v != "" && v != "latest" {
+		avail = append(avail, v)
+	}
+	if v := strings.TrimSpace(prerelease); v != "" && v != "latest" && v != stable {
+		avail = append(avail, v)
+	}
+
+	// Git-hosted packages use discovery keys that include the commit SHA ("tag+commit" or "commit").
+	// The local installed version usually does *not* include the commit, so we can't reliably
+	// filter/match by semver against the raw discovered keys. Instead, resolve each available tag
+	// to its discovery key and then check first-seen directly.
+	if providers.IsGitHostedSourceID(sourceID) {
+		out := discoveryDisplay{Available: avail}
+		now := time.Now()
+		minAge := cfg.Flags.MinReleaseAge
+		installedVersion = strings.TrimSpace(installedVersion)
+		installedCommit = strings.TrimSpace(installedCommit)
+
+		// IMPORTANT: listing must not trigger network work. For git providers, do NOT
+		// resolve tags to commits here. Instead, derive discovery state purely from
+		// what's already recorded in discovery.json (tag+commit / commit).
+		refs, err := ls.gitDiscoveredRefsFromDB(sourceID)
+		if err != nil {
+			return out
+		}
+
+		// For each available ref (tag or commit), see if we have any discovery entry for it.
+		// - For tags: any recorded "tag+<commit>" counts as discovered; we use the newest firstSeen.
+		// - For commit-only refs: a recorded "<commit>" counts as discovered.
+		for _, v := range avail {
+			v = strings.TrimSpace(v)
+			if v == "" || v == "latest" {
+				continue
+			}
+
+			var (
+				found          bool
+				foundCommit    string
+				foundFirstSeen time.Time
+			)
+			for _, r := range refs {
+				if r.Ref != "" {
+					// tag+commit entry
+					if r.Ref == v {
+						if !found || r.FirstSeen.After(foundFirstSeen) {
+							found = true
+							foundCommit = r.Commit
+							foundFirstSeen = r.FirstSeen
+						}
+					}
+					continue
+				}
+				// commit-only entry
+				if r.Commit == v {
+					if !found || r.FirstSeen.After(foundFirstSeen) {
+						found = true
+						foundCommit = r.Commit
+						foundFirstSeen = r.FirstSeen
+					}
+				}
+			}
+			if !found {
+				continue
+			}
+
+			out.Discovered = append(out.Discovered, v)
+
+			// If the user already has this exact ref pinned (same tag + same commit),
+			// it is not an install candidate; don't show it as eligible.
+			if installedVersion != "" && v == installedVersion && installedCommit != "" && foundCommit != "" && strings.EqualFold(installedCommit, foundCommit) {
+				continue
+			}
+
+			age := now.Sub(foundFirstSeen)
+			if minAge <= 0 || age >= minAge {
+				out.Eligible = append(out.Eligible, v)
+			} else {
+				out.EligibleSoon = append(out.EligibleSoon, v)
+			}
+		}
+		return out
+	}
+
+	discovered, err := providers.ListDiscoveredVersions(sourceID)
+	if err != nil || len(discovered) == 0 {
+		return discoveryDisplay{Available: avail}
+	}
+
+	now := time.Now()
+	minAge := cfg.Flags.MinReleaseAge
+
+	out := discoveryDisplay{Available: avail}
+	for _, dv := range discovered {
+		// Always show what's been recorded, even if it's not newer than installed.
+		out.Discovered = append(out.Discovered, dv.Version)
+
+		// Eligibility is only meaningful for versions newer than what's installed.
+		if shouldRecordDiscoveredVersion(installedVersion, dv.Version) {
+			age := now.Sub(dv.FirstSeen)
+			if minAge <= 0 || age >= minAge {
+				out.Eligible = append(out.Eligible, dv.Version)
+			} else {
+				out.EligibleSoon = append(out.EligibleSoon, dv.Version)
+			}
+		}
+	}
+	return out
+}
+
+func joinVersionsOrDash(v []string) string {
+	if len(v) == 0 {
+		return "-"
+	}
+	return strings.Join(v, ", ")
 }
 
 func (ls *ListService) discoveryPairsForRegistry(registry []registry_parser.RegistryItem) []providers.DiscoveryPair {
@@ -318,19 +505,26 @@ func (ls *ListService) recordDiscoveryOnRegistryRefresh(refreshed bool, buildPai
 // Optional opts.OnlyOutdated, OnlyProviders, and OnlyCategories are applied in addition (AND).
 func (ls *ListService) ListInstalledPackages(opts ListQueryOptions) {
 	var localPackages []local_packages_parser.LocalPackageItem
+	var refreshed bool
 	filters := opts.NameFilters
 
-	prep := func() {
-		refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistryQuiet()
-		localPackages = ls.localPackages.GetData(true).Packages
-		ls.registry.GetData(refreshed)
+	discovery := func() {
 		ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
 			return ls.discoveryPairsForInstalled(localPackages)
 		})
 	}
 
+	upRegistry := func() {
+		refreshed, _ = ls.fileDownloader.DownloadAndUnzipRegistryQuiet()
+		localPackages = ls.localPackages.GetData(true).Packages
+		ls.registry.GetData(refreshed)
+		if refreshed {
+			_ = spinnerutil.Run("Releases discovery (min-age) ...", discovery)
+		}
+	}
+
 	if ls.shouldShowListPrepSpinner() {
-		_ = spinnerutil.Run("Preparing package list...", prep)
+		_ = spinnerutil.Run("Preparing package list...", upRegistry)
 	} else {
 		refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistry()
 		localPackages = ls.localPackages.GetData(true).Packages
@@ -479,8 +673,8 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 	for _, provider := range providers {
 		if packages, exists := packagesByProvider[provider]; exists {
 			markdown.WriteString(fmt.Sprintf("## %s Packages\n\n", strings.ToUpper(provider)))
-			markdown.WriteString("| Package ID | Version | Status |\n")
-			markdown.WriteString("|------------|---------|--------|\n")
+			markdown.WriteString("| Package ID | Installed | Available | Discovered | Eligible |\n")
+			markdown.WriteString("|------------|-----------|-----------|------------|----------|\n")
 
 			for _, pkg := range packages {
 				updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version)
@@ -500,7 +694,28 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 					}
 				}
 
-				markdown.WriteString(fmt.Sprintf("| %s | %s | %s |\n", pkg.SourceID, pkg.Version, statusText))
+				disc := ls.discoveryDisplayForInstalled(pkg.SourceID, pkg.Version, pkg.Commit)
+				eligibleText := joinVersionsOrDash(disc.Eligible)
+				if eligibleText == "-" && len(disc.EligibleSoon) > 0 {
+					eligibleText = fmt.Sprintf("%s (not yet)", strings.Join(disc.EligibleSoon, ", "))
+				}
+				discoveredText := joinVersionsOrDash(disc.Discovered)
+				if discoveredText == "-" && cfg.Flags.MinReleaseAge > 0 && (len(disc.Available) > 0) {
+					discoveredText = "-"
+				}
+				availableText := joinVersionsOrDash(disc.Available)
+				if hasUpdate && statusText != "" {
+					// include update summary first, then discovery details in separate columns
+					_ = statusText
+				}
+
+				markdown.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s |\n",
+					pkg.SourceID,
+					pkg.Version,
+					availableText,
+					discoveredText,
+					eligibleText,
+				))
 
 				totalCount++
 				if hasUpdate {
@@ -566,6 +781,18 @@ func (ls *ListService) listInstalledPackagesPlain(filteredPackages []local_packa
 			for _, pkg := range packages {
 				updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version)
 				fmt.Printf("   %s %s (v%s) %s\n", getProviderIcon(provider), pkg.SourceID, pkg.Version, updateInfo)
+				disc := ls.discoveryDisplayForInstalled(pkg.SourceID, pkg.Version, pkg.Commit)
+				if cfg.Flags.MinReleaseAge > 0 {
+					fmt.Printf("      available:  %s\n", joinVersionsOrDash(disc.Available))
+					fmt.Printf("      discovered: %s\n", joinVersionsOrDash(disc.Discovered))
+					if len(disc.Eligible) > 0 {
+						fmt.Printf("      eligible:   %s\n", strings.Join(disc.Eligible, ", "))
+					} else if len(disc.EligibleSoon) > 0 {
+						fmt.Printf("      eligible:   - (not yet: %s)\n", strings.Join(disc.EligibleSoon, ", "))
+					} else {
+						fmt.Printf("      eligible:   -\n")
+					}
+				}
 				totalCount++
 				if hasUpdate {
 					updateCount++
@@ -608,13 +835,17 @@ func (ls *ListService) listInstalledPackagesJSON(filteredPackages []local_packag
 		packageName := getPackageNameFromSourceID(pkg.SourceID)
 		provider := getProviderFromSourceID(pkg.SourceID)
 		_, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version)
+		disc := ls.discoveryDisplayForInstalled(pkg.SourceID, pkg.Version, pkg.Commit)
 
 		pkgData := map[string]any{
-			"source_id":  pkg.SourceID,
-			"name":       packageName,
-			"provider":   provider,
-			"version":    pkg.Version,
-			"has_update": hasUpdate,
+			"source_id":           pkg.SourceID,
+			"name":                packageName,
+			"provider":            provider,
+			"version":             pkg.Version,
+			"has_update":          hasUpdate,
+			"available_versions":  disc.Available,
+			"discovered_versions": disc.Discovered,
+			"eligible_versions":   disc.Eligible,
 		}
 		packagesData = append(packagesData, pkgData)
 

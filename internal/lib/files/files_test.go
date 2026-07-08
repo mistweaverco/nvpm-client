@@ -414,7 +414,7 @@ func TestDefaultImplementations(t *testing.T) {
 	t.Run("default HTTP client", func(t *testing.T) {
 		client := &defaultHTTPClient{}
 		// This will fail in tests, but we can test the interface implementation
-		_, err := client.Get("http://invalid-url")
+		_, err := client.Get("http://")
 		assert.Error(t, err)
 	})
 
@@ -1064,7 +1064,7 @@ func TestDefaultImplementationsComprehensive(t *testing.T) {
 	t.Run("default HTTP client", func(t *testing.T) {
 		client := &defaultHTTPClient{}
 		// This will fail in tests, but we can test the interface implementation
-		_, err := client.Get("http://invalid-url")
+		_, err := client.Get("http://")
 		assert.Error(t, err)
 	})
 

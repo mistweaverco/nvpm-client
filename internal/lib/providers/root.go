@@ -48,6 +48,9 @@ func SetMinReleaseAgePolicy(p MinReleaseAgePolicy) {
 
 func enforceMinReleaseAge(sourceID, version string) error {
 	p := minReleaseAgePolicy
+	if p.BypassAll || p.Force || p.MinAge <= 0 {
+		return nil
+	}
 	if version == "" || version == "latest" {
 		// We only gate concrete versions.
 		return nil
@@ -70,12 +73,6 @@ func enforceMinReleaseAge(sourceID, version string) error {
 			return nil
 		}
 		return fmt.Errorf("min-release-age: cannot read discovery database: %w", err)
-	}
-	if p.BypassAll || p.Force {
-		return nil
-	}
-	if p.MinAge <= 0 {
-		return nil
 	}
 	age := now.Sub(firstSeen)
 	if age >= p.MinAge {

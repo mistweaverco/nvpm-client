@@ -245,9 +245,10 @@ Example:
 ```yaml
 # yaml-language-server: $schema=https://nvpm.dev/client-config.schema.json
 paths:
-  cacheDir: ~/.cache/nvpm
+  cache-dir: ~/.cache/nvpm
 registry:
-  cacheMaxAge: 6h
+  cache-max-age: 6h
+  min-release-age: 7d
   urls:
     - https://github.com/mistweaverco/nvpm-registry/releases/latest/download/nvpm-registry.json.zip
 ui:

@@ -130,7 +130,7 @@ func (p *GitLabProvider) installFromRelease(sourceID, repo, version string, regi
 	}
 
 	// Resolve asset filename with template variables
-	assetFileName := ResolveTemplate(asset.File.String(), resolvedVersion)
+	assetFileName := AssetArchiveFileName(asset.File, resolvedVersion)
 
 	// Download release asset
 	// GitLab release download URL format: https://gitlab.com/{project_path}/-/releases/{tag}/downloads/{filename}
@@ -152,7 +152,7 @@ func (p *GitLabProvider) installFromRelease(sourceID, repo, version string, regi
 	defer gitlabRemoveAll(tempDir)
 
 	// Download asset
-	assetPath := filepath.Join(tempDir, assetFileName)
+	assetPath := filepath.Join(tempDir, filepath.Base(assetFileName))
 	if err := p.downloadAsset(releaseURL, assetPath); err != nil {
 		Logger.Error(fmt.Sprintf("GitLab Install: Error downloading asset: %v", err))
 		return false
@@ -177,15 +177,15 @@ func (p *GitLabProvider) installFromRelease(sourceID, repo, version string, regi
 		return false
 	}
 
-	// Copy binaries to repo path
-	if err := p.copyBinariesFromExtract(extractDir, repoPath, asset, registryItem); err != nil {
-		Logger.Error(fmt.Sprintf("GitLab Install: Error copying binaries: %v", err))
+	// Copy extracted release contents into the package directory
+	if err := InstallReleaseAssetContents(extractDir, repoPath, asset); err != nil {
+		Logger.Error(fmt.Sprintf("GitLab Install: Error installing release contents: %v", err))
 		return false
 	}
 
-	// Create symlinks
-	if err := p.createSymlinksFromRegistry(repo, repoPath, asset, registryItem); err != nil {
-		Logger.Info(fmt.Sprintf("GitLab Install: Warning creating symlinks: %v", err))
+	// Create symlinks or exec wrappers
+	if err := LinkReleaseBins(repoPath, asset, registryItem); err != nil {
+		Logger.Info(fmt.Sprintf("GitLab Install: Warning creating bin links: %v", err))
 	}
 
 	// Add to local packages
@@ -597,132 +597,6 @@ func (p *GitLabProvider) extractArchive(archivePath, destDir string) error {
 
 	if _, err := io.Copy(destFile, srcFile); err != nil {
 		return fmt.Errorf("failed to copy file: %w", err)
-	}
-
-	return nil
-}
-
-// copyBinariesFromExtract copies binaries from extracted archive to package directory
-func (p *GitLabProvider) copyBinariesFromExtract(extractDir, repoPath string, asset *registry_parser.RegistryItemSourceAsset, registryItem registry_parser.RegistryItem) error {
-	// Find binaries in extracted directory
-	// Asset file might have a path prefix (e.g., "file.tar.gz:subdir/")
-	assetFile := asset.File.String()
-	if idx := strings.Index(assetFile, ":"); idx > 0 {
-		// Extract path prefix
-		pathPrefix := assetFile[idx+1:]
-		extractDir = filepath.Join(extractDir, pathPrefix)
-	}
-
-	// Look for binaries based on registry bin configuration
-	for binName, binTemplate := range registryItem.Bin {
-		binPath := ResolveBinPath(binTemplate, asset, binName)
-		if binPath == "" {
-			continue
-		}
-
-		// Search for the binary in extracted directory
-		sourceBinPath := filepath.Join(extractDir, binPath)
-		if _, err := gitlabStat(sourceBinPath); err == nil {
-			// Copy binary to repo path
-			destBinPath := filepath.Join(repoPath, filepath.Base(binPath))
-			if err := p.copyFile(sourceBinPath, destBinPath); err != nil {
-				Logger.Info(fmt.Sprintf("GitLab: Warning copying binary %s: %v", binPath, err))
-			} else {
-				// Make executable
-				os.Chmod(destBinPath, 0755)
-			}
-		} else {
-			// Try to find binary by name in extracted directory
-			if foundPath := p.findBinaryInDir(extractDir, filepath.Base(binPath)); foundPath != "" {
-				destBinPath := filepath.Join(repoPath, filepath.Base(binPath))
-				if err := p.copyFile(foundPath, destBinPath); err != nil {
-					Logger.Info(fmt.Sprintf("GitLab: Warning copying binary %s: %v", binPath, err))
-				} else {
-					os.Chmod(destBinPath, 0755)
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// copyFile copies a file from source to destination
-func (p *GitLabProvider) copyFile(src, dest string) error {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = srcFile.Close() }()
-
-	destFile, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = destFile.Close() }()
-
-	_, err = io.Copy(destFile, srcFile)
-	return err
-}
-
-// findBinaryInDir searches for a binary file in a directory recursively
-func (p *GitLabProvider) findBinaryInDir(dir, name string) string {
-	entries, err := gitlabReadDir(dir)
-	if err != nil {
-		return ""
-	}
-
-	for _, entry := range entries {
-		path := filepath.Join(dir, entry.Name())
-		if entry.IsDir() {
-			if found := p.findBinaryInDir(path, name); found != "" {
-				return found
-			}
-		} else if entry.Name() == name {
-			return path
-		}
-	}
-
-	return ""
-}
-
-// createSymlinksFromRegistry creates symlinks based on registry bin configuration
-func (p *GitLabProvider) createSymlinksFromRegistry(_ string, repoPath string, asset *registry_parser.RegistryItemSourceAsset, registryItem registry_parser.RegistryItem) error {
-	nvpmBinDir := files.GetAppBinPath()
-
-	for binName, binTemplate := range registryItem.Bin {
-		binPath := ResolveBinPath(binTemplate, asset, binName)
-		if binPath == "" {
-			continue
-		}
-
-		// Find the actual binary file in repo path
-		binaryFile := filepath.Join(repoPath, filepath.Base(binPath))
-		if _, err := gitlabStat(binaryFile); err != nil {
-			// Try to find by name
-			if found := p.findBinaryInDir(repoPath, filepath.Base(binPath)); found != "" {
-				binaryFile = found
-			} else {
-				continue
-			}
-		}
-
-		// Create symlink
-		symlink := filepath.Join(nvpmBinDir, binName)
-		if _, err := gitlabLstat(symlink); err == nil {
-			gitlabRemove(symlink)
-		}
-
-		relPath, err := filepath.Rel(nvpmBinDir, binaryFile)
-		if err != nil {
-			relPath = binaryFile
-		}
-
-		if err := gitlabSymlink(relPath, symlink); err != nil {
-			Logger.Info(fmt.Sprintf("GitLab: Warning creating symlink %s -> %s: %v", symlink, relPath, err))
-		} else {
-			Logger.Info(fmt.Sprintf("GitLab: Created symlink %s -> %s", symlink, relPath))
-		}
 	}
 
 	return nil

@@ -2,9 +2,13 @@ package providers
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 )
 
@@ -174,4 +178,162 @@ func ResolveBinPath(binTemplate string, asset *registry_parser.RegistryItemSourc
 	}
 
 	return result
+}
+
+// SplitAssetFileSpec splits a registry asset file spec into the archive file name
+// and an optional install subdirectory.
+//
+// Example: "lua-language-server-{{version}}-linux-x64.tar.gz:libexec/" ->
+// ("lua-language-server-{{version}}-linux-x64.tar.gz", "libexec")
+func SplitAssetFileSpec(spec string) (fileName, installSubdir string) {
+	if idx := strings.Index(spec, ":"); idx > 0 {
+		return spec[:idx], strings.Trim(strings.TrimSpace(spec[idx+1:]), "/")
+	}
+	return spec, ""
+}
+
+// AssetArchiveFileName resolves the downloadable archive name from a registry asset file spec.
+func AssetArchiveFileName(file registry_parser.RegistryItemSourceAssetFile, version string) string {
+	fileName, _ := SplitAssetFileSpec(file.String())
+	return ResolveTemplate(fileName, version)
+}
+
+// ParseBinSpec parses a registry bin path. Paths prefixed with "exec:" are executed
+// via a wrapper script; other paths are symlinked directly.
+func ParseBinSpec(binPath string) (exec bool, relPath string) {
+	if strings.HasPrefix(binPath, "exec:") {
+		return true, strings.TrimPrefix(binPath, "exec:")
+	}
+	return false, binPath
+}
+
+// InstallReleaseAssetContents copies extracted release contents into the package directory.
+// When the asset file spec includes ":subdir/", contents are installed under that subdir.
+func InstallReleaseAssetContents(extractDir, repoPath string, asset *registry_parser.RegistryItemSourceAsset) error {
+	_, installSubdir := SplitAssetFileSpec(asset.File.String())
+	destDir := repoPath
+	if installSubdir != "" {
+		destDir = filepath.Join(repoPath, filepath.Clean(installSubdir))
+	}
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("create install directory: %w", err)
+	}
+	return copyDirContents(extractDir, destDir)
+}
+
+// LinkReleaseBins exposes installed release binaries in the nvpm bin directory.
+func LinkReleaseBins(repoPath string, asset *registry_parser.RegistryItemSourceAsset, registryItem registry_parser.RegistryItem) error {
+	nvpmBinDir := files.GetAppBinPath()
+
+	for binName, binTemplate := range registryItem.Bin {
+		binPath := ResolveBinPath(binTemplate, asset, binName)
+		if binPath == "" {
+			continue
+		}
+
+		isExec, relPath := ParseBinSpec(binPath)
+		targetPath := filepath.Join(repoPath, filepath.Clean(relPath))
+		if _, err := os.Stat(targetPath); err != nil {
+			if found := findBinaryInTree(repoPath, filepath.Base(relPath)); found != "" {
+				targetPath = found
+			} else {
+				Logger.Info(fmt.Sprintf("Release install: binary not found for %s at %s", binName, targetPath))
+				continue
+			}
+		}
+
+		linkPath := filepath.Join(nvpmBinDir, binName)
+		if _, err := os.Lstat(linkPath); err == nil {
+			_ = os.Remove(linkPath)
+		}
+
+		if isExec {
+			wrapper := fmt.Sprintf("#!/bin/sh\nexec %q \"$@\"\n", targetPath)
+			if err := os.WriteFile(linkPath, []byte(wrapper), 0755); err != nil {
+				Logger.Info(fmt.Sprintf("Release install: warning creating wrapper %s: %v", linkPath, err))
+				continue
+			}
+			Logger.Info(fmt.Sprintf("Release install: Created wrapper %s -> %s", linkPath, targetPath))
+			continue
+		}
+
+		relLink, err := filepath.Rel(nvpmBinDir, targetPath)
+		if err != nil {
+			relLink = targetPath
+		}
+		if err := os.Symlink(relLink, linkPath); err != nil {
+			Logger.Info(fmt.Sprintf("Release install: warning creating symlink %s -> %s: %v", linkPath, relLink, err))
+			continue
+		}
+		Logger.Info(fmt.Sprintf("Release install: Created symlink %s -> %s", linkPath, relLink))
+	}
+
+	return nil
+}
+
+func copyDirContents(src, dest string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		destPath := filepath.Join(dest, entry.Name())
+		if entry.IsDir() {
+			if err := os.MkdirAll(destPath, 0755); err != nil {
+				return err
+			}
+			if err := copyDirContents(srcPath, destPath); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := copyReleaseFile(srcPath, destPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyReleaseFile(src, dest string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = srcFile.Close() }()
+
+	destFile, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = destFile.Close() }()
+
+	if _, err := io.Copy(destFile, srcFile); err != nil {
+		return err
+	}
+
+	if info, err := os.Stat(src); err == nil {
+		_ = os.Chmod(dest, info.Mode().Perm())
+	}
+	return nil
+}
+
+func findBinaryInTree(dir, name string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if entry.IsDir() {
+			if found := findBinaryInTree(path, name); found != "" {
+				return found
+			}
+			continue
+		}
+		if entry.Name() == name {
+			return path
+		}
+	}
+	return ""
 }

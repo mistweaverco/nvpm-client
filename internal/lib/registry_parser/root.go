@@ -243,6 +243,7 @@ type RegistryItem struct {
 	Licenses          []string                `json:"licenses"`
 	Languages         []string                `json:"languages"`
 	Categories        []string                `json:"categories"`
+	EditorIntegration []string                `json:"editor_integration,omitempty"`
 	Aliases           []string                `json:"aliases,omitempty"`
 	Source            RegistryItemSource      `json:"source"`
 	Bin               map[string]string       `json:"bin"`

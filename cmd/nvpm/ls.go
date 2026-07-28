@@ -100,6 +100,7 @@ func init() {
 	lsCmd.Flags().Bool("only-outdated", false, "Show only packages with an update available (with --all: registry entries you have installed that are outdated)")
 	lsCmd.Flags().String("only-providers", "", "Comma-separated provider names to include, e.g. pypi,npm")
 	lsCmd.Flags().String("only-categories", "", "Comma-separated category tokens; a package matches if any of its registry categories matches any token (substring match, case-insensitive), e.g. lsp,tree-sitter-parser")
+	lsCmd.Flags().Bool("only-plugins", false, "Show only Neovim plugins (lock entries with extras.kind neovim-plugin)")
 }
 
 // ListQueryOptions holds positional name filters plus optional list constraints.
@@ -108,6 +109,7 @@ type ListQueryOptions struct {
 	OnlyOutdated   bool
 	OnlyProviders  []string // lowercase provider names (validated)
 	OnlyCategories []string // trimmed tokens from --only-categories
+	OnlyPlugins    bool     // lock entries with extras.kind neovim-plugin
 }
 
 func listQueryOptionsFromFlags(cmd *cobra.Command, args []string) (ListQueryOptions, error) {
@@ -121,6 +123,7 @@ func listQueryOptionsFromFlags(cmd *cobra.Command, args []string) (ListQueryOpti
 	}
 	onlyCat, _ := cmd.Flags().GetString("only-categories")
 	opts.OnlyCategories = parseCommaSeparatedList(onlyCat)
+	opts.OnlyPlugins, _ = cmd.Flags().GetBool("only-plugins")
 	return opts, nil
 }
 
@@ -192,7 +195,7 @@ func registryItemMatchesCategoryFilters(categories []string, filters []string) b
 }
 
 func (o ListQueryOptions) hasAdvancedFilters() bool {
-	return o.OnlyOutdated || len(o.OnlyProviders) > 0 || len(o.OnlyCategories) > 0
+	return o.OnlyOutdated || len(o.OnlyProviders) > 0 || len(o.OnlyCategories) > 0 || o.OnlyPlugins
 }
 
 func (o ListQueryOptions) constraintDescriptionPlain() string {
@@ -208,6 +211,9 @@ func (o ListQueryOptions) constraintDescriptionPlain() string {
 	}
 	if len(o.OnlyCategories) > 0 {
 		parts = append(parts, fmt.Sprintf("categories: %s", strings.Join(o.OnlyCategories, ", ")))
+	}
+	if o.OnlyPlugins {
+		parts = append(parts, "neovim plugins only")
 	}
 	return " - " + strings.Join(parts, "; ")
 }
@@ -631,6 +637,11 @@ func (ls *ListService) applyAdvancedFiltersToInstalled(packages []local_packages
 		}
 		if opts.OnlyOutdated {
 			if _, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version); !hasUpdate {
+				continue
+			}
+		}
+		if opts.OnlyPlugins {
+			if pkg.Extras == nil || pkg.Extras.Kind != local_packages_parser.KindNeovimPlugin {
 				continue
 			}
 		}

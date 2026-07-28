@@ -73,10 +73,17 @@ func (p *CodebergProvider) getRepoURL(repo string) string {
 	return fmt.Sprintf("%s/%s.git", p.BASE_URL, repo)
 }
 
-func (p *CodebergProvider) getRepoPath(repo string) string {
+func (p *CodebergProvider) packagesDir(sourceID string) string {
+	if IsEditorPluginPackage(sourceID) {
+		return filepath.Join(files.GetAppNeovimPluginsPath(), p.PROVIDER_NAME)
+	}
+	return p.APP_PACKAGES_DIR
+}
+
+func (p *CodebergProvider) getRepoPath(sourceID, repo string) string {
 	// Sanitize repo path for filesystem (replace / with _)
 	safeRepo := strings.ReplaceAll(repo, "/", "_")
-	return filepath.Join(p.APP_PACKAGES_DIR, safeRepo)
+	return filepath.Join(p.packagesDir(sourceID), safeRepo)
 }
 
 func (p *CodebergProvider) checkGitAvailable() bool {
@@ -96,6 +103,10 @@ func (p *CodebergProvider) Install(sourceID, version string) bool {
 
 	// If registry has asset information, use release download method
 	if len(registryItem.Source.Asset) > 0 {
+		if IsEditorPluginPackage(sourceID) {
+			Logger.Error("Codeberg Install: Neovim plugins cannot be installed from release assets; use a git-based registry entry")
+			return false
+		}
 		return p.installFromRelease(sourceID, repo, version, registryItem)
 	}
 
@@ -168,7 +179,7 @@ func (p *CodebergProvider) installFromRelease(sourceID, repo, version string, re
 	}
 
 	// Find binaries and create symlinks
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	if err := codebergMkdirAll(repoPath, 0755); err != nil {
 		Logger.Error(fmt.Sprintf("Codeberg Install: Error creating package directory: %v", err))
 		return false
@@ -202,20 +213,20 @@ func (p *CodebergProvider) installFromGit(sourceID, repo, version string) bool {
 		return false
 	}
 
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	repoURL := p.getRepoURL(repo)
+	packagesDir := p.packagesDir(sourceID)
 
-	// Ensure packages directory exists
-	if err := codebergMkdirAll(p.APP_PACKAGES_DIR, 0755); err != nil {
+	if err := codebergMkdirAll(packagesDir, 0755); err != nil {
 		Logger.Error(fmt.Sprintf("Codeberg Install: Error creating packages directory: %v", err))
 		return false
 	}
 
-	// Clone or update repository
+	isPlugin := IsEditorPluginPackage(sourceID)
+
 	if _, err := codebergStat(repoPath); os.IsNotExist(err) {
-		// Clone repository
 		Logger.Info(fmt.Sprintf("Codeberg Install: Cloning %s to %s", repoURL, repoPath))
-		code, err := codebergShellOut("git", []string{"clone", repoURL, repoPath}, p.APP_PACKAGES_DIR, nil)
+		code, err := codebergShellOut("git", []string{"clone", repoURL, repoPath}, packagesDir, nil)
 		if err != nil || code != 0 {
 			Logger.Error(fmt.Sprintf("Codeberg Install: Error cloning repository: %v", err))
 			return false
@@ -239,12 +250,23 @@ func (p *CodebergProvider) installFromGit(sourceID, repo, version string) bool {
 		if err != nil {
 			Logger.Info(fmt.Sprintf("Codeberg Install: Could not determine latest version, using default branch: %v", err))
 			// Try to detect default branch
-			resolvedVersion = p.getDefaultBranch(repoPath)
+			resolvedVersion = p.getDefaultBranch(repo, repoPath)
 		}
 	}
 
 	// Checkout specific version
 	code, err := codebergShellOut("git", []string{"checkout", resolvedVersion}, repoPath, nil)
+	if err != nil || code != 0 {
+		if IsGenericDefaultBranchAlias(resolvedVersion) {
+			defaultBranch := p.getDefaultBranch(repo, repoPath)
+			if defaultBranch != "" && defaultBranch != resolvedVersion {
+				code, err = codebergShellOut("git", []string{"checkout", defaultBranch}, repoPath, nil)
+				if err == nil && code == 0 {
+					resolvedVersion = defaultBranch
+				}
+			}
+		}
+	}
 	if err != nil || code != 0 {
 		Logger.Error(fmt.Sprintf("Codeberg Install: Error checking out version %s: %v", resolvedVersion, err))
 		return false
@@ -255,11 +277,16 @@ func (p *CodebergProvider) installFromGit(sourceID, repo, version string) bool {
 		Logger.Error(fmt.Sprintf("Codeberg Install: Error adding package to local packages: %v", err))
 		return false
 	}
+	if isPlugin {
+		if err := local_packages_parser.MergePackageKind(sourceID, KindNeovimPlugin); err != nil {
+			Logger.Info(fmt.Sprintf("Codeberg Install: Warning persisting plugin kind: %v", err))
+		}
+	}
 
-	// Create symlinks for binaries
-	if err := p.createSymlinks(repo, repoPath); err != nil {
-		Logger.Info(fmt.Sprintf("Codeberg Install: Warning creating symlinks: %v", err))
-		// Don't fail installation if symlinks fail
+	if !isPlugin {
+		if err := p.createSymlinks(repo, repoPath); err != nil {
+			Logger.Info(fmt.Sprintf("Codeberg Install: Warning creating symlinks: %v", err))
+		}
 	}
 
 	Logger.Info(fmt.Sprintf("Codeberg Install: Successfully installed %s@%s", repo, resolvedVersion))
@@ -273,12 +300,14 @@ func (p *CodebergProvider) Remove(sourceID string) bool {
 		return false
 	}
 
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	Logger.Info(fmt.Sprintf("Codeberg Remove: Removing package %s", repo))
 
 	// Remove symlinks
-	if err := p.removeSymlinks(repo); err != nil {
-		Logger.Info(fmt.Sprintf("Codeberg Remove: Warning removing symlinks: %v", err))
+	if !IsEditorPluginPackage(sourceID) {
+		if err := p.removeSymlinks(sourceID, repo); err != nil {
+			Logger.Info(fmt.Sprintf("Codeberg Remove: Warning removing symlinks: %v", err))
+		}
 	}
 
 	// Remove repository directory
@@ -306,7 +335,7 @@ func (p *CodebergProvider) Update(sourceID string) bool {
 		return false
 	}
 
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	if _, err := codebergStat(repoPath); os.IsNotExist(err) {
 		Logger.Error(fmt.Sprintf("Codeberg Update: Repository %s is not installed", repo))
 		return false
@@ -323,7 +352,7 @@ func (p *CodebergProvider) Update(sourceID string) bool {
 	latestVersion, err := p.getLatestVersionFromRepo(repoPath)
 	if err != nil {
 		// No tags found, use default branch
-		latestVersion = p.getDefaultBranch(repoPath)
+		latestVersion = p.getDefaultBranch(repo, repoPath)
 	}
 
 	Logger.Info(fmt.Sprintf("Codeberg Update: Updating %s to version %s", repo, latestVersion))
@@ -333,7 +362,7 @@ func (p *CodebergProvider) Update(sourceID string) bool {
 func (p *CodebergProvider) getLatestVersion(repo string) (string, error) {
 	// This is called before cloning, so we can't use the repo path
 	// Just return default branch - actual version will be resolved after clone
-	return p.getDefaultBranch(""), nil
+	return p.getDefaultBranch(repo, ""), nil
 }
 
 func (p *CodebergProvider) getLatestVersionFromRepo(repoPath string) (string, error) {
@@ -354,27 +383,8 @@ func (p *CodebergProvider) getLatestVersionFromRepo(repoPath string) (string, er
 	return tag, nil
 }
 
-func (p *CodebergProvider) getDefaultBranch(repoPath string) string {
-	// Try to detect default branch
-	if repoPath != "" {
-		// Try to get default branch from existing repo
-		code, branchOutput, err := codebergShellOutCapture("git", []string{"symbolic-ref", "refs/remotes/origin/HEAD"}, repoPath, nil)
-		if err == nil && code == 0 {
-			branch := strings.TrimSpace(branchOutput)
-			if strings.HasPrefix(branch, "refs/remotes/origin/") {
-				return strings.TrimPrefix(branch, "refs/remotes/origin/")
-			}
-		}
-		// Try common branch names
-		for _, branch := range []string{"main", "master", "trunk"} {
-			code, _, _ := codebergShellOutCapture("git", []string{"show-ref", "--verify", "--quiet", "refs/remotes/origin/" + branch}, repoPath, nil)
-			if code == 0 {
-				return branch
-			}
-		}
-	}
-	// Fallback to main
-	return "main"
+func (p *CodebergProvider) getDefaultBranch(repo, repoPath string) string {
+	return ResolveGitDefaultBranch(p.getRepoURL(repo), repoPath)
 }
 
 func (p *CodebergProvider) createSymlinks(_ string, repoPath string) error {
@@ -429,8 +439,8 @@ func (p *CodebergProvider) createSymlinks(_ string, repoPath string) error {
 	return nil
 }
 
-func (p *CodebergProvider) removeSymlinks(repo string) error {
-	repoPath := p.getRepoPath(repo)
+func (p *CodebergProvider) removeSymlinks(sourceID, repo string) error {
+	repoPath := p.getRepoPath(sourceID, repo)
 	repoPath = filepath.Clean(repoPath) + string(os.PathSeparator)
 	nvpmBinDir := files.GetAppBinPath()
 
@@ -477,14 +487,14 @@ func (p *CodebergProvider) Sync() bool {
 		if repo == "" {
 			continue
 		}
-		repoPath := p.getRepoPath(repo)
+		repoPath := p.getRepoPath(pkg.SourceID, repo)
 		if _, err := codebergStat(repoPath); os.IsNotExist(err) {
 			// Re-install missing packages
 			Logger.Info(fmt.Sprintf("Codeberg Sync: Re-installing missing package %s", repo))
 			if !p.Install(pkg.SourceID, pkg.Version) {
 				allOk = false
 			}
-		} else {
+		} else if !IsEditorPluginPackage(pkg.SourceID) {
 			// Update symlinks
 			if err := p.createSymlinks(repo, repoPath); err != nil {
 				Logger.Info(fmt.Sprintf("Codeberg Sync: Warning creating symlinks for %s: %v", repo, err))

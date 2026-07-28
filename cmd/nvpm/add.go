@@ -221,10 +221,17 @@ Examples:
 					// selectedSourceID is already in provider:package-id format, use it directly
 					displayID := selectedSourceID
 
+					if err := providers.CheckSourceIDPrerequisites(internalID); err != nil {
+						printProviderRequirementError(displayID, err)
+						failureCount++
+						failures = append(failures, displayID)
+						continue
+					}
+
 					// Resolve version before installing to show actual version in spinner
 					resolvedVersion, err := resolveVersionFn(internalID, version)
 					if err != nil {
-						fmt.Printf("%s Failed to resolve version for %s: %v\n", IconClose(), displayID, err)
+						printProviderRequirementError(displayID, err)
 						failureCount++
 						failures = append(failures, displayID)
 						continue
@@ -247,8 +254,18 @@ Examples:
 					}
 					providers.SetRequestedIntegrations(effectiveIntegrations)
 
+					kind, kindErr := providers.ResolveInstallKind(registryItem, installPluginEditor)
+					if kindErr != nil {
+						fmt.Printf("%s %v\n", IconClose(), kindErr)
+						failureCount++
+						failures = append(failures, displayID)
+						continue
+					}
+
 					title := fmt.Sprintf("Installing %s@%s...", displayID, resolvedVersion)
 					success, err := runNvpmInstallWithTreeSitterSpinnerPhases(title, internalID, resolvedVersion, registryItem, func() bool {
+						providers.SetInstallKind(kind)
+						defer providers.ResetInstallKind()
 						return installPackageFn(internalID, resolvedVersion)
 					})
 					providers.SetRequestedIntegrations(userIntegrations)
@@ -289,10 +306,17 @@ Examples:
 				displayID = fmt.Sprintf("%s:%s", provider, pkgName)
 			}
 
+			if err := providers.CheckSourceIDPrerequisites(internalID); err != nil {
+				printProviderRequirementError(displayID, err)
+				failureCount++
+				failures = append(failures, displayID)
+				continue
+			}
+
 			// Resolve version before installing to show actual version in spinner
 			resolvedVersion, err := resolveVersionFn(internalID, version)
 			if err != nil {
-				fmt.Printf("%s Failed to resolve version for %s: %v\n", IconClose(), displayID, err)
+				printProviderRequirementError(displayID, err)
 				failureCount++
 				failures = append(failures, displayID)
 				continue
@@ -315,8 +339,18 @@ Examples:
 			}
 			providers.SetRequestedIntegrations(effectiveIntegrations)
 
+			kind, kindErr := providers.ResolveInstallKind(registryItem, installPluginEditor)
+			if kindErr != nil {
+				fmt.Printf("%s %v\n", IconClose(), kindErr)
+				failureCount++
+				failures = append(failures, displayID)
+				continue
+			}
+
 			title := fmt.Sprintf("Installing %s@%s...", displayID, resolvedVersion)
 			success, err := runNvpmInstallWithTreeSitterSpinnerPhases(title, internalID, resolvedVersion, registryItem, func() bool {
+				providers.SetInstallKind(kind)
+				defer providers.ResetInstallKind()
 				return installPackageFn(internalID, resolvedVersion)
 			})
 			providers.SetRequestedIntegrations(userIntegrations)
@@ -390,11 +424,13 @@ Examples:
 var installIntegrations []string
 var installExternalTreeSitterQueries string
 var installForce bool
+var installPluginEditor string
 
 func init() {
 	addCmd.Flags().StringSliceVar(&installIntegrations, "integrate", nil, "run integration backends after install (e.g. --integrate neovim)")
 	addCmd.Flags().StringVar(&installExternalTreeSitterQueries, "external-treesitter-queries", "ask", "when Neovim integration needs optional query-only git repos from the registry: ask (default), always, never (overridden by NVPM_EXTERNAL_TREESITTER_QUERIES when this flag is left at default)")
 	addCmd.Flags().BoolVar(&installForce, "force", false, "bypass min-release-age safety checks")
+	addCmd.Flags().StringVar(&installPluginEditor, "plugin", "", "install as an editor plugin (under plugins/ instead of packages/); supported: neovim")
 }
 
 // indirections for testability

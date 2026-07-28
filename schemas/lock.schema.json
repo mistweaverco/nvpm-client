@@ -47,6 +47,11 @@
                 },
                 "uniqueItems": true
               },
+              "kind": {
+                "type": "string",
+                "description": "Package kind; neovim-plugin entries install under plugins/ and are loaded by nvpm.nvim.",
+                "enum": ["neovim-plugin"]
+              },
               "treesitter_parser_choices": {
                 "type": "array",
                 "description": "When several Tree-sitter-parser registry packages provide the same language, pins which source id to use for requires / inherit resolution.",

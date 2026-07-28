@@ -504,6 +504,33 @@ func TestLocalPackagesParserWithMock(t *testing.T) {
 			assert.Equal(t, []string{"neovim"}, saved.Packages[0].Extras.Integrations)
 		}
 	})
+
+	t.Run("merge package kind sets extras.kind", func(t *testing.T) {
+		existingData := LocalPackageRoot{
+			Packages: []LocalPackageItem{
+				{SourceID: "github:folke/tokyonight.nvim", Version: "v1.0.0"},
+			},
+		}
+		jsonData, _ := json.Marshal(existingData)
+
+		var written []byte
+		mockFileManager := &MockFileManager{
+			GetAppLocalPackagesFilePathFunc: func() string { return "/mock/path/local-packages.json" },
+			FileExistsFunc:                  func(path string) bool { return true },
+			ReadFileFunc:                    func(path string) ([]byte, error) { return jsonData, nil },
+			WriteFileFunc:                   func(path string, data []byte, perm uint32) error { written = data; return nil },
+		}
+
+		parser := NewWithFileManager(mockFileManager)
+		err := parser.MergePackageKind("github:folke/tokyonight.nvim", KindNeovimPlugin)
+		assert.NoError(t, err)
+
+		var saved LocalPackageRoot
+		_ = json.Unmarshal(written, &saved)
+		if assert.NotNil(t, saved.Packages[0].Extras) {
+			assert.Equal(t, KindNeovimPlugin, saved.Packages[0].Extras.Kind)
+		}
+	})
 }
 
 func TestMockFileManager(t *testing.T) {

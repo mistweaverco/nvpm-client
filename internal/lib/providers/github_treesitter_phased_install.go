@@ -232,17 +232,18 @@ func GitHubTreeSitterCompleteInteractiveInstall(sourceID, resolvedVersion string
 
 // gitCloneAndCheckout mirrors the first phase of installFromGit: ensure clone, resolve version, checkout.
 func (p *GitHubProvider) gitCloneAndCheckout(sourceID, repo, version string) (repoPath string, resolvedVersion string, ok bool) {
-	repoPath = p.getRepoPath(repo)
+	repoPath = p.getRepoPath(sourceID, repo)
 	repoURL := p.getRepoURL(repo)
+	packagesDir := p.packagesDir(sourceID)
 
-	if err := githubMkdir(p.APP_PACKAGES_DIR, 0755); err != nil && !os.IsExist(err) {
+	if err := githubMkdir(packagesDir, 0755); err != nil && !os.IsExist(err) {
 		Logger.Error(fmt.Sprintf("GitHub Install: Error creating packages directory: %v", err))
 		return "", "", false
 	}
 
 	if _, err := githubStat(repoPath); os.IsNotExist(err) {
 		Logger.Info(fmt.Sprintf("GitHub Install: Cloning %s to %s", repoURL, repoPath))
-		code, err := githubShellOut("git", []string{"clone", repoURL, repoPath}, p.APP_PACKAGES_DIR, nil)
+		code, err := githubShellOut("git", []string{"clone", repoURL, repoPath}, packagesDir, nil)
 		if err != nil || code != 0 {
 			Logger.Error(fmt.Sprintf("GitHub Install: Error cloning %s: %v", repoURL, err))
 			return "", "", false
@@ -262,11 +263,22 @@ func (p *GitHubProvider) gitCloneAndCheckout(sourceID, repo, version string) (re
 		resolvedVersion, err = p.getLatestVersionFromRepo(repoPath)
 		if err != nil {
 			Logger.Info(fmt.Sprintf("GitHub Install: Could not determine latest version, using default branch: %v", err))
-			resolvedVersion = p.getDefaultBranch(repoPath)
+			resolvedVersion = p.getDefaultBranch(repo, repoPath)
 		}
 	}
 
 	code, err := githubShellOut("git", []string{"checkout", resolvedVersion}, repoPath, nil)
+	if err != nil || code != 0 {
+		if IsGenericDefaultBranchAlias(resolvedVersion) {
+			defaultBranch := p.getDefaultBranch(repo, repoPath)
+			if defaultBranch != "" && defaultBranch != resolvedVersion {
+				code, err = githubShellOut("git", []string{"checkout", defaultBranch}, repoPath, nil)
+				if err == nil && code == 0 {
+					resolvedVersion = defaultBranch
+				}
+			}
+		}
+	}
 	if err != nil || code != 0 {
 		Logger.Error(fmt.Sprintf("GitHub Install: Error checking out version %s: %v", resolvedVersion, err))
 		return "", "", false

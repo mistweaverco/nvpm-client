@@ -2,6 +2,7 @@ package nvpm
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -32,6 +33,20 @@ func PrintJSON(data interface{}) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(data)
+}
+
+func printProviderRequirementError(packageID string, err error) {
+	if err == nil {
+		return
+	}
+	if ShouldUseJSONOutput() {
+		_ = PrintJSON(map[string]string{
+			"package": packageID,
+			"error":   err.Error(),
+		})
+		return
+	}
+	fmt.Printf("%s Cannot install %s:\n%s\n\n", IconClose(), packageID, err.Error())
 }
 
 // RemoveMarkdownFormatting removes markdown formatting from text

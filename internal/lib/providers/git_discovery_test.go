@@ -93,3 +93,28 @@ func TestGitRepoURLFromSourceID(t *testing.T) {
 	_, err = gitRepoURLFromSourceID("npm:eslint")
 	require.Error(t, err)
 }
+
+func TestParseLsRemoteDefaultBranch(t *testing.T) {
+	assert.Equal(t, "release", parseLsRemoteDefaultBranch("ref: refs/heads/release\tHEAD\na12fd5672110c8aa7e3c8419e28c96943ca179be\tHEAD\n"))
+	assert.Equal(t, "main", parseLsRemoteDefaultBranch("ref: refs/heads/main\tHEAD\n"))
+	assert.Equal(t, "", parseLsRemoteDefaultBranch("a12fd5672110c8aa7e3c8419e28c96943ca179be\tHEAD\n"))
+}
+
+func TestResolveGitDefaultBranchFromRemote(t *testing.T) {
+	old := gitDiscoveryShellOutCapture
+	defer func() { gitDiscoveryShellOutCapture = old }()
+	gitDiscoveryShellOutCapture = func(_ string, args []string, _ string, _ []string) (int, string, error) {
+		if len(args) >= 3 && args[0] == "ls-remote" && args[1] == "--symref" {
+			return 0, "ref: refs/heads/release\tHEAD\n", nil
+		}
+		return 1, "", nil
+	}
+
+	assert.Equal(t, "release", ResolveGitDefaultBranch("https://github.com/github/copilot.vim.git", ""))
+}
+
+func TestIsGenericDefaultBranchAlias(t *testing.T) {
+	assert.True(t, IsGenericDefaultBranchAlias("main"))
+	assert.True(t, IsGenericDefaultBranchAlias("HEAD"))
+	assert.False(t, IsGenericDefaultBranchAlias("release"))
+}

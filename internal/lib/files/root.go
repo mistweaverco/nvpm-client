@@ -238,6 +238,12 @@ func GetAppPackagesPath() string {
 	return EnsureDirExists(GetAppDataSharePath() + string(os.PathSeparator) + "packages")
 }
 
+// GetAppNeovimPluginsPath returns the path to Neovim plugin installs.
+// Layout: <path>/github/owner_repo/, mirroring git provider layout under packages/.
+func GetAppNeovimPluginsPath() string {
+	return EnsureDirExists(GetAppDataSharePath() + string(os.PathSeparator) + "plugins")
+}
+
 // GetAppDataSharePath returns the path to the app data share directory
 // If the NVPM_HOME environment variable is set, it will use that path
 // This is separate from the config directory and follows XDG Base Directory spec

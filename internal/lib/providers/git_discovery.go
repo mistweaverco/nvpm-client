@@ -88,6 +88,85 @@ func parseLsRemoteFirstCommit(out string) string {
 	return ""
 }
 
+func parseLsRemoteDefaultBranch(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "ref: ") {
+			continue
+		}
+		rest := strings.TrimPrefix(line, "ref: ")
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			continue
+		}
+		ref := fields[0]
+		if strings.HasPrefix(ref, "refs/heads/") {
+			return strings.TrimPrefix(ref, "refs/heads/")
+		}
+	}
+	return ""
+}
+
+func gitLocalDefaultBranch(repoPath string) (string, bool) {
+	if strings.TrimSpace(repoPath) == "" {
+		return "", false
+	}
+	code, branchOutput, err := gitDiscoveryShellOutCapture("git", []string{"symbolic-ref", "refs/remotes/origin/HEAD"}, repoPath, nil)
+	if err == nil && code == 0 {
+		branch := strings.TrimSpace(branchOutput)
+		if strings.HasPrefix(branch, "refs/remotes/origin/") {
+			return strings.TrimPrefix(branch, "refs/remotes/origin/"), true
+		}
+	}
+	for _, branch := range []string{"main", "master", "trunk", "release"} {
+		code, _, _ := gitDiscoveryShellOutCapture("git", []string{"show-ref", "--verify", "--quiet", "refs/remotes/origin/" + branch}, repoPath, nil)
+		if code == 0 {
+			return branch, true
+		}
+	}
+	return "", false
+}
+
+func gitLsRemoteDefaultBranch(repoURL string) (string, error) {
+	repoURL = strings.TrimSpace(repoURL)
+	if repoURL == "" {
+		return "", fmt.Errorf("empty repository URL")
+	}
+	code, out, err := gitDiscoveryShellOutCapture("git", []string{"ls-remote", "--symref", repoURL, "HEAD"}, "", nil)
+	if err != nil || code != 0 {
+		return "", fmt.Errorf("git ls-remote --symref: %w", err)
+	}
+	if branch := parseLsRemoteDefaultBranch(out); branch != "" {
+		return branch, nil
+	}
+	return "", fmt.Errorf("no default branch in ls-remote output")
+}
+
+// IsGenericDefaultBranchAlias reports common placeholder branch names that may not
+// exist on a given repository (for example when we previously defaulted to "main").
+func IsGenericDefaultBranchAlias(ref string) bool {
+	switch strings.ToLower(strings.TrimSpace(ref)) {
+	case "main", "master", "trunk", "head":
+		return true
+	default:
+		return false
+	}
+}
+
+// ResolveGitDefaultBranch resolves the repository default branch from a local clone
+// and/or remote URL. Falls back to "main" when discovery fails.
+func ResolveGitDefaultBranch(repoURL, repoPath string) string {
+	if branch, ok := gitLocalDefaultBranch(repoPath); ok {
+		return branch
+	}
+	if strings.TrimSpace(repoURL) != "" {
+		if branch, err := gitLsRemoteDefaultBranch(repoURL); err == nil && branch != "" {
+			return branch
+		}
+	}
+	return "main"
+}
+
 func gitLsRemoteResolveCommit(repoURL, ref string) (string, error) {
 	repoURL = strings.TrimSpace(repoURL)
 	ref = strings.TrimSpace(ref)

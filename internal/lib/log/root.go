@@ -7,15 +7,35 @@ import (
 
 var logLevel slog.Level = slog.LevelDebug
 
+const envDebug = "NVPM_DEBUG"
+const envLogFormat = "NVPM_LOG_FORMAT"
+
 func SetLogLevel(level slog.Level) {
 	slog.SetLogLoggerLevel(level)
+}
+
+func buildHandler(level slog.Level) slog.Handler {
+	opts := &slog.HandlerOptions{
+		Level: level,
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			// Keep CLI errors compact and readable by omitting timestamps.
+			if a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		},
+	}
+	if os.Getenv(envLogFormat) == "json" {
+		return slog.NewJSONHandler(os.Stderr, opts)
+	}
+	return slog.NewTextHandler(os.Stderr, opts)
 }
 
 func NewLogger() *slog.Logger {
 	logLevel = slog.LevelError
 	// If the NVPM_DEBUG environment variable is set,
-	if os.Getenv("NVPM_DEBUG") != "" {
-		switch os.Getenv("NVPM_DEBUG") {
+	if os.Getenv(envDebug) != "" {
+		switch os.Getenv(envDebug) {
 		case "debug":
 			logLevel = slog.LevelDebug
 		case "info":
@@ -26,5 +46,5 @@ func NewLogger() *slog.Logger {
 			logLevel = slog.LevelError
 		}
 	}
-	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+	return slog.New(buildHandler(logLevel))
 }

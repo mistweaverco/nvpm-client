@@ -36,10 +36,16 @@ This command verifies the presence of required tools and dependencies for all pr
 				icon := getProviderIcon(status.Provider)
 				if status.Available {
 					fmt.Printf("%s %s: Available\n", icon, strings.ToUpper(status.Provider))
+					fmt.Printf("   %s\n", status.Description)
 				} else {
 					hasWarnings = true
-					fmt.Printf("%s %s: %s Not available (missing: %s)\n", icon, strings.ToUpper(status.Provider), IconAlert(), status.RequiredTool)
+					fmt.Printf("%s %s: Not available (missing: %s)\n", icon, strings.ToUpper(status.Provider), status.RequiredTool)
 					fmt.Printf("   %s\n", status.Description)
+					if status.InstallGuide != "" {
+						fmt.Printf("   Install: %s\n", status.InstallGuide)
+					} else if status.Website != "" {
+						fmt.Printf("   Website: %s\n", status.Website)
+					}
 				}
 				fmt.Println()
 			}

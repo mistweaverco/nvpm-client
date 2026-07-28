@@ -74,10 +74,17 @@ func (p *GitHubProvider) getRepoURL(repo string) string {
 	return fmt.Sprintf("%s/%s.git", p.BASE_URL, repo)
 }
 
-func (p *GitHubProvider) getRepoPath(repo string) string {
+func (p *GitHubProvider) packagesDir(sourceID string) string {
+	if IsEditorPluginPackage(sourceID) {
+		return filepath.Join(files.GetAppNeovimPluginsPath(), p.PROVIDER_NAME)
+	}
+	return p.APP_PACKAGES_DIR
+}
+
+func (p *GitHubProvider) getRepoPath(sourceID, repo string) string {
 	// Sanitize repo path for filesystem (replace / with _)
 	safeRepo := strings.ReplaceAll(repo, "/", "_")
-	return filepath.Join(p.APP_PACKAGES_DIR, safeRepo)
+	return filepath.Join(p.packagesDir(sourceID), safeRepo)
 }
 
 func (p *GitHubProvider) checkGitAvailable() bool {
@@ -117,6 +124,10 @@ func (p *GitHubProvider) Install(sourceID, version string) bool {
 
 	// If registry has asset information, use release download method
 	if len(registryItem.Source.Asset) > 0 {
+		if IsEditorPluginPackage(sourceID) {
+			Logger.Error("GitHub Install: Neovim plugins cannot be installed from release assets; use a git-based registry entry")
+			return false
+		}
 		return p.installFromRelease(sourceID, repo, version, registryItem)
 	}
 
@@ -195,7 +206,7 @@ func (p *GitHubProvider) installFromRelease(sourceID, repo, version string, regi
 	}
 
 	// Find binaries and create symlinks
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	if err := githubMkdirAll(repoPath, 0755); err != nil {
 		Logger.Error(fmt.Sprintf("GitHub Install: Error creating package directory: %v", err))
 		return false
@@ -210,7 +221,7 @@ func (p *GitHubProvider) installFromRelease(sourceID, repo, version string, regi
 	// Clean up any legacy symlinks from prior git installs.
 	// (Those used relative symlinks into the repo dir, which must be removed before
 	// we create the curated bin links from the registry.)
-	_ = p.removeSymlinks(repo)
+	_ = p.removeSymlinks(sourceID, repo)
 
 	// Create symlinks or exec wrappers
 	if err := LinkReleaseBins(repoPath, asset, registryItem); err != nil {
@@ -242,11 +253,20 @@ func (p *GitHubProvider) installFromGit(sourceID, repo, version string) bool {
 		return false
 	}
 
+	isPlugin := IsEditorPluginPackage(sourceID)
+
 	// If this is a Tree-sitter parser package, build artifacts and run requested integrations.
-	pins, err := buildAndMaybeIntegrateTreeSitter(repoPath, registryItem, resolvedVersion, nil)
-	if err != nil {
-		Logger.Error(fmt.Sprintf("GitHub Install: Error building tree-sitter parsers: %v", err))
-		return false
+	if !isPlugin {
+		pins, err := buildAndMaybeIntegrateTreeSitter(repoPath, registryItem, resolvedVersion, nil)
+		if err != nil {
+			Logger.Error(fmt.Sprintf("GitHub Install: Error building tree-sitter parsers: %v", err))
+			return false
+		}
+		if len(pins) > 0 {
+			if err := local_packages_parser.MergePackageTreeSitterExternalQueryPins(sourceID, pins); err != nil {
+				Logger.Info(fmt.Sprintf("GitHub Install: Warning persisting external query pins: %v", err))
+			}
+		}
 	}
 
 	// Add to local packages
@@ -255,16 +275,17 @@ func (p *GitHubProvider) installFromGit(sourceID, repo, version string) bool {
 		Logger.Error(fmt.Sprintf("GitHub Install: Error adding package to local packages: %v", err))
 		return false
 	}
-	if len(pins) > 0 {
-		if err := local_packages_parser.MergePackageTreeSitterExternalQueryPins(sourceID, pins); err != nil {
-			Logger.Info(fmt.Sprintf("GitHub Install: Warning persisting external query pins: %v", err))
+	if isPlugin {
+		if err := local_packages_parser.MergePackageKind(sourceID, KindNeovimPlugin); err != nil {
+			Logger.Info(fmt.Sprintf("GitHub Install: Warning persisting plugin kind: %v", err))
 		}
 	}
 
-	// Create symlinks for binaries
-	if err := p.createSymlinks(repo, repoPath); err != nil {
-		Logger.Info(fmt.Sprintf("GitHub Install: Warning creating symlinks: %v", err))
-		// Don't fail installation if symlinks fail
+	// Create symlinks for binaries (tool packages only)
+	if !isPlugin {
+		if err := p.createSymlinks(repo, repoPath); err != nil {
+			Logger.Info(fmt.Sprintf("GitHub Install: Warning creating symlinks: %v", err))
+		}
 	}
 
 	Logger.Info(fmt.Sprintf("GitHub Install: Successfully installed %s@%s", repo, resolvedVersion))
@@ -285,12 +306,14 @@ func (p *GitHubProvider) Remove(sourceID string) bool {
 		Logger.Info(fmt.Sprintf("GitHub Remove: Warning removing Neovim tree-sitter parsers: %v", err))
 	}
 
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	Logger.Info(fmt.Sprintf("GitHub Remove: Removing package %s", repo))
 
-	// Remove symlinks
-	if err := p.removeSymlinks(repo); err != nil {
-		Logger.Info(fmt.Sprintf("GitHub Remove: Warning removing symlinks: %v", err))
+	// Remove symlinks (tool packages only)
+	if !IsEditorPluginPackage(sourceID) {
+		if err := p.removeSymlinks(sourceID, repo); err != nil {
+			Logger.Info(fmt.Sprintf("GitHub Remove: Warning removing symlinks: %v", err))
+		}
 	}
 
 	// Remove repository directory
@@ -318,7 +341,7 @@ func (p *GitHubProvider) Update(sourceID string) bool {
 		return false
 	}
 
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	if _, err := githubStat(repoPath); os.IsNotExist(err) {
 		Logger.Error(fmt.Sprintf("GitHub Update: Repository %s is not installed", repo))
 		return false
@@ -335,7 +358,7 @@ func (p *GitHubProvider) Update(sourceID string) bool {
 	latestVersion, err := p.getLatestVersionFromRepo(repoPath)
 	if err != nil {
 		// No tags found, use default branch
-		latestVersion = p.getDefaultBranch(repoPath)
+		latestVersion = p.getDefaultBranch(repo, repoPath)
 	}
 
 	Logger.Info(fmt.Sprintf("GitHub Update: Updating %s to version %s", repo, latestVersion))
@@ -348,7 +371,7 @@ func (p *GitHubProvider) getLatestVersion(repo string) (string, error) {
 	if tag, err := p.getLatestReleaseTag(repo); err == nil && strings.TrimSpace(tag) != "" {
 		return strings.TrimSpace(tag), nil
 	}
-	return p.getDefaultBranch(""), nil
+	return p.getDefaultBranch(repo, ""), nil
 }
 
 func (p *GitHubProvider) getLatestVersionFromRepo(repoPath string) (string, error) {
@@ -369,27 +392,8 @@ func (p *GitHubProvider) getLatestVersionFromRepo(repoPath string) (string, erro
 	return tag, nil
 }
 
-func (p *GitHubProvider) getDefaultBranch(repoPath string) string {
-	// Try to detect default branch
-	if repoPath != "" {
-		// Try to get default branch from existing repo
-		code, branchOutput, err := githubShellOutCapture("git", []string{"symbolic-ref", "refs/remotes/origin/HEAD"}, repoPath, nil)
-		if err == nil && code == 0 {
-			branch := strings.TrimSpace(branchOutput)
-			if strings.HasPrefix(branch, "refs/remotes/origin/") {
-				return strings.TrimPrefix(branch, "refs/remotes/origin/")
-			}
-		}
-		// Try common branch names
-		for _, branch := range []string{"main", "master", "trunk"} {
-			code, _, _ := githubShellOutCapture("git", []string{"show-ref", "--verify", "--quiet", "refs/remotes/origin/" + branch}, repoPath, nil)
-			if code == 0 {
-				return branch
-			}
-		}
-	}
-	// Fallback to main
-	return "main"
+func (p *GitHubProvider) getDefaultBranch(repo, repoPath string) string {
+	return ResolveGitDefaultBranch(p.getRepoURL(repo), repoPath)
 }
 
 func (p *GitHubProvider) createSymlinks(_ string, repoPath string) error {
@@ -444,8 +448,8 @@ func (p *GitHubProvider) createSymlinks(_ string, repoPath string) error {
 	return nil
 }
 
-func (p *GitHubProvider) removeSymlinks(repo string) error {
-	repoPath := p.getRepoPath(repo)
+func (p *GitHubProvider) removeSymlinks(sourceID, repo string) error {
+	repoPath := p.getRepoPath(sourceID, repo)
 	repoPath = filepath.Clean(repoPath) + string(os.PathSeparator)
 	nvpmBinDir := files.GetAppBinPath()
 
@@ -492,15 +496,15 @@ func (p *GitHubProvider) Sync() bool {
 		if repo == "" {
 			continue
 		}
-		repoPath := p.getRepoPath(repo)
+		repoPath := p.getRepoPath(pkg.SourceID, repo)
 		if _, err := githubStat(repoPath); os.IsNotExist(err) {
 			// Re-install missing packages
 			Logger.Info(fmt.Sprintf("GitHub Sync: Re-installing missing package %s", repo))
 			if !p.Install(pkg.SourceID, pkg.Version) {
 				allOk = false
 			}
-		} else {
-			// Update symlinks
+		} else if !IsEditorPluginPackage(pkg.SourceID) {
+			// Update symlinks for tool packages
 			if err := p.createSymlinks(repo, repoPath); err != nil {
 				Logger.Info(fmt.Sprintf("GitHub Sync: Warning creating symlinks for %s: %v", repo, err))
 			}

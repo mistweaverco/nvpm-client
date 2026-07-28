@@ -75,11 +75,18 @@ func (p *GitLabProvider) getRepoURL(repo string) string {
 	return fmt.Sprintf("%s/%s.git", p.BASE_URL, repo)
 }
 
-func (p *GitLabProvider) getRepoPath(repo string) string {
+func (p *GitLabProvider) packagesDir(sourceID string) string {
+	if IsEditorPluginPackage(sourceID) {
+		return filepath.Join(files.GetAppNeovimPluginsPath(), p.PROVIDER_NAME)
+	}
+	return p.APP_PACKAGES_DIR
+}
+
+func (p *GitLabProvider) getRepoPath(sourceID, repo string) string {
 	// Sanitize repo path for filesystem (replace / with _)
 	// GitLab paths can be deeply nested like group/subgroup/project
 	safeRepo := strings.ReplaceAll(repo, "/", "_")
-	return filepath.Join(p.APP_PACKAGES_DIR, safeRepo)
+	return filepath.Join(p.packagesDir(sourceID), safeRepo)
 }
 
 func (p *GitLabProvider) checkGitAvailable() bool {
@@ -99,6 +106,10 @@ func (p *GitLabProvider) Install(sourceID, version string) bool {
 
 	// If registry has asset information, use release download method
 	if len(registryItem.Source.Asset) > 0 {
+		if IsEditorPluginPackage(sourceID) {
+			Logger.Error("GitLab Install: Neovim plugins cannot be installed from release assets; use a git-based registry entry")
+			return false
+		}
 		return p.installFromRelease(sourceID, repo, version, registryItem)
 	}
 
@@ -171,7 +182,7 @@ func (p *GitLabProvider) installFromRelease(sourceID, repo, version string, regi
 	}
 
 	// Find binaries and create symlinks
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	if err := gitlabMkdirAll(repoPath, 0755); err != nil {
 		Logger.Error(fmt.Sprintf("GitLab Install: Error creating package directory: %v", err))
 		return false
@@ -205,20 +216,23 @@ func (p *GitLabProvider) installFromGit(sourceID, repo, version string) bool {
 		return false
 	}
 
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	repoURL := p.getRepoURL(repo)
+	packagesDir := p.packagesDir(sourceID)
 
 	// Ensure packages directory exists
-	if err := gitlabMkdirAll(p.APP_PACKAGES_DIR, 0755); err != nil {
+	if err := gitlabMkdirAll(packagesDir, 0755); err != nil {
 		Logger.Error(fmt.Sprintf("GitLab Install: Error creating packages directory: %v", err))
 		return false
 	}
+
+	isPlugin := IsEditorPluginPackage(sourceID)
 
 	// Clone or update repository
 	if _, err := gitlabStat(repoPath); os.IsNotExist(err) {
 		// Clone repository
 		Logger.Info(fmt.Sprintf("GitLab Install: Cloning %s to %s", repoURL, repoPath))
-		code, err := gitlabShellOut("git", []string{"clone", repoURL, repoPath}, p.APP_PACKAGES_DIR, nil)
+		code, err := gitlabShellOut("git", []string{"clone", repoURL, repoPath}, packagesDir, nil)
 		if err != nil || code != 0 {
 			Logger.Error(fmt.Sprintf("GitLab Install: Error cloning repository: %v", err))
 			return false
@@ -242,12 +256,23 @@ func (p *GitLabProvider) installFromGit(sourceID, repo, version string) bool {
 		if err != nil {
 			Logger.Info(fmt.Sprintf("GitLab Install: Could not determine latest version, using default branch: %v", err))
 			// Try to detect default branch
-			resolvedVersion = p.getDefaultBranch(repoPath)
+			resolvedVersion = p.getDefaultBranch(repo, repoPath)
 		}
 	}
 
 	// Checkout specific version
 	code, err := gitlabShellOut("git", []string{"checkout", resolvedVersion}, repoPath, nil)
+	if err != nil || code != 0 {
+		if IsGenericDefaultBranchAlias(resolvedVersion) {
+			defaultBranch := p.getDefaultBranch(repo, repoPath)
+			if defaultBranch != "" && defaultBranch != resolvedVersion {
+				code, err = gitlabShellOut("git", []string{"checkout", defaultBranch}, repoPath, nil)
+				if err == nil && code == 0 {
+					resolvedVersion = defaultBranch
+				}
+			}
+		}
+	}
 	if err != nil || code != 0 {
 		Logger.Error(fmt.Sprintf("GitLab Install: Error checking out version %s: %v", resolvedVersion, err))
 		return false
@@ -258,11 +283,17 @@ func (p *GitLabProvider) installFromGit(sourceID, repo, version string) bool {
 		Logger.Error(fmt.Sprintf("GitLab Install: Error adding package to local packages: %v", err))
 		return false
 	}
+	if isPlugin {
+		if err := local_packages_parser.MergePackageKind(sourceID, KindNeovimPlugin); err != nil {
+			Logger.Info(fmt.Sprintf("GitLab Install: Warning persisting plugin kind: %v", err))
+		}
+	}
 
-	// Create symlinks for binaries
-	if err := p.createSymlinks(repo, repoPath); err != nil {
-		Logger.Info(fmt.Sprintf("GitLab Install: Warning creating symlinks: %v", err))
-		// Don't fail installation if symlinks fail
+	// Create symlinks for binaries (tool packages only)
+	if !isPlugin {
+		if err := p.createSymlinks(repo, repoPath); err != nil {
+			Logger.Info(fmt.Sprintf("GitLab Install: Warning creating symlinks: %v", err))
+		}
 	}
 
 	Logger.Info(fmt.Sprintf("GitLab Install: Successfully installed %s@%s", repo, resolvedVersion))
@@ -276,12 +307,14 @@ func (p *GitLabProvider) Remove(sourceID string) bool {
 		return false
 	}
 
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	Logger.Info(fmt.Sprintf("GitLab Remove: Removing package %s", repo))
 
-	// Remove symlinks
-	if err := p.removeSymlinks(repo); err != nil {
-		Logger.Info(fmt.Sprintf("GitLab Remove: Warning removing symlinks: %v", err))
+	// Remove symlinks (tool packages only)
+	if !IsEditorPluginPackage(sourceID) {
+		if err := p.removeSymlinks(sourceID, repo); err != nil {
+			Logger.Info(fmt.Sprintf("GitLab Remove: Warning removing symlinks: %v", err))
+		}
 	}
 
 	// Remove repository directory
@@ -309,7 +342,7 @@ func (p *GitLabProvider) Update(sourceID string) bool {
 		return false
 	}
 
-	repoPath := p.getRepoPath(repo)
+	repoPath := p.getRepoPath(sourceID, repo)
 	if _, err := gitlabStat(repoPath); os.IsNotExist(err) {
 		Logger.Error(fmt.Sprintf("GitLab Update: Repository %s is not installed", repo))
 		return false
@@ -326,7 +359,7 @@ func (p *GitLabProvider) Update(sourceID string) bool {
 	latestVersion, err := p.getLatestVersionFromRepo(repoPath)
 	if err != nil {
 		// No tags found, use default branch
-		latestVersion = p.getDefaultBranch(repoPath)
+		latestVersion = p.getDefaultBranch(repo, repoPath)
 	}
 
 	Logger.Info(fmt.Sprintf("GitLab Update: Updating %s to version %s", repo, latestVersion))
@@ -336,7 +369,7 @@ func (p *GitLabProvider) Update(sourceID string) bool {
 func (p *GitLabProvider) getLatestVersion(repo string) (string, error) {
 	// This is called before cloning, so we can't use the repo path
 	// Just return default branch - actual version will be resolved after clone
-	return p.getDefaultBranch(""), nil
+	return p.getDefaultBranch(repo, ""), nil
 }
 
 func (p *GitLabProvider) getLatestVersionFromRepo(repoPath string) (string, error) {
@@ -357,27 +390,8 @@ func (p *GitLabProvider) getLatestVersionFromRepo(repoPath string) (string, erro
 	return tag, nil
 }
 
-func (p *GitLabProvider) getDefaultBranch(repoPath string) string {
-	// Try to detect default branch
-	if repoPath != "" {
-		// Try to get default branch from existing repo
-		code, branchOutput, err := gitlabShellOutCapture("git", []string{"symbolic-ref", "refs/remotes/origin/HEAD"}, repoPath, nil)
-		if err == nil && code == 0 {
-			branch := strings.TrimSpace(branchOutput)
-			if strings.HasPrefix(branch, "refs/remotes/origin/") {
-				return strings.TrimPrefix(branch, "refs/remotes/origin/")
-			}
-		}
-		// Try common branch names
-		for _, branch := range []string{"main", "master", "trunk"} {
-			code, _, _ := gitlabShellOutCapture("git", []string{"show-ref", "--verify", "--quiet", "refs/remotes/origin/" + branch}, repoPath, nil)
-			if code == 0 {
-				return branch
-			}
-		}
-	}
-	// Fallback to main
-	return "main"
+func (p *GitLabProvider) getDefaultBranch(repo, repoPath string) string {
+	return ResolveGitDefaultBranch(p.getRepoURL(repo), repoPath)
 }
 
 func (p *GitLabProvider) createSymlinks(_ string, repoPath string) error {
@@ -432,8 +446,8 @@ func (p *GitLabProvider) createSymlinks(_ string, repoPath string) error {
 	return nil
 }
 
-func (p *GitLabProvider) removeSymlinks(repo string) error {
-	repoPath := p.getRepoPath(repo)
+func (p *GitLabProvider) removeSymlinks(sourceID, repo string) error {
+	repoPath := p.getRepoPath(sourceID, repo)
 	repoPath = filepath.Clean(repoPath) + string(os.PathSeparator)
 	nvpmBinDir := files.GetAppBinPath()
 
@@ -480,15 +494,14 @@ func (p *GitLabProvider) Sync() bool {
 		if repo == "" {
 			continue
 		}
-		repoPath := p.getRepoPath(repo)
+		repoPath := p.getRepoPath(pkg.SourceID, repo)
 		if _, err := gitlabStat(repoPath); os.IsNotExist(err) {
 			// Re-install missing packages
 			Logger.Info(fmt.Sprintf("GitLab Sync: Re-installing missing package %s", repo))
 			if !p.Install(pkg.SourceID, pkg.Version) {
 				allOk = false
 			}
-		} else {
-			// Update symlinks
+		} else if !IsEditorPluginPackage(pkg.SourceID) {
 			if err := p.createSymlinks(repo, repoPath); err != nil {
 				Logger.Info(fmt.Sprintf("GitLab Sync: Warning creating symlinks for %s: %v", repo, err))
 			}

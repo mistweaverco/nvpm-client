@@ -12,6 +12,9 @@ var marshalIndent = json.MarshalIndent
 
 const lockSchemaURL = "https://nvpm.dev/nvpm-lock.schema.json"
 
+// KindNeovimPlugin marks a lock entry as a Neovim plugin (installed under plugins/).
+const KindNeovimPlugin = "neovim-plugin"
+
 type LocalPackageItem struct {
 	SourceID string `json:"sourceId"`
 	Version  string `json:"version"`
@@ -21,6 +24,8 @@ type LocalPackageItem struct {
 }
 
 type PackageExtras struct {
+	// Kind distinguishes Neovim plugins from CLI/tool packages (e.g. "neovim-plugin").
+	Kind         string   `json:"kind,omitempty"`
 	Integrations []string `json:"integrations,omitempty"`
 	// TreeSitterParserChoices pins which registry Tree-sitter-parser package to use for a language
 	// when several registry entries provide the same language (requires / inherit resolution).
@@ -470,6 +475,44 @@ func (lpp *LocalPackagesParser) GetDataForProvider(provider string) LocalPackage
 	return LocalPackageRoot{Packages: filteredPackages}
 }
 
+func (lpp *LocalPackagesParser) MergePackageKind(sourceID, kind string) error {
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		return nil
+	}
+	sourceID = normalizePackageID(sourceID)
+	if sourceID == "" {
+		return nil
+	}
+
+	root := lpp.GetData(false)
+	for i := range root.Packages {
+		if root.Packages[i].SourceID != sourceID {
+			continue
+		}
+		if root.Packages[i].Extras == nil {
+			root.Packages[i].Extras = &PackageExtras{}
+		}
+		root.Packages[i].Extras.Kind = kind
+		goto writeKind
+	}
+	return nil
+
+writeKind:
+	root.Schema = lockSchemaURL
+	localPackagesFile := lpp.fileManager.GetAppLocalPackagesFilePath()
+	jsonData, err := marshalIndent(root, "", "  ")
+	if err != nil {
+		return err
+	}
+	return lpp.fileManager.WriteFile(localPackagesFile, jsonData, 0644)
+}
+
+func (lpp *LocalPackagesParser) IsNeovimPlugin(sourceID string) bool {
+	item := lpp.GetBySourceId(sourceID)
+	return item.Extras != nil && item.Extras.Kind == KindNeovimPlugin
+}
+
 func (lpp *LocalPackagesParser) AddLocalPackage(sourceId string, version string) error {
 	return lpp.AddLocalPackageWithCommit(sourceId, version, "")
 }
@@ -612,6 +655,14 @@ func MergePackageIntegrations(sourceId string, integrations []string) error {
 
 func MergePackageTreeSitterExternalQueryPins(sourceId string, pins []TreeSitterExternalQueryPin) error {
 	return globalParser.MergePackageTreeSitterExternalQueryPins(sourceId, pins)
+}
+
+func MergePackageKind(sourceId, kind string) error {
+	return globalParser.MergePackageKind(sourceId, kind)
+}
+
+func IsNeovimPlugin(sourceId string) bool {
+	return globalParser.IsNeovimPlugin(sourceId)
 }
 
 func GetBySourceId(sourceId string) LocalPackageItem {

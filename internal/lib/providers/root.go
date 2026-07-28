@@ -331,6 +331,9 @@ func syncAllProviders() {
 // If version is empty or "latest", it will query the provider for the latest version.
 // Otherwise, it returns the provided version as-is.
 func ResolveVersion(sourceId string, version string) (string, error) {
+	if err := CheckSourceIDPrerequisites(sourceId); err != nil {
+		return version, err
+	}
 	if version != "" && version != "latest" {
 		return version, nil
 	}
@@ -409,6 +412,10 @@ func ResolveVersion(sourceId string, version string) (string, error) {
 }
 
 func Install(sourceId string, version string) bool {
+	if err := CheckSourceIDPrerequisites(sourceId); err != nil {
+		Logger.Error(err.Error())
+		return false
+	}
 	if err := enforceMinReleaseAge(sourceId, version); err != nil {
 		Logger.Error(err.Error())
 		return false
@@ -487,6 +494,10 @@ func Remove(sourceId string) bool {
 }
 
 func Update(sourceId string) bool {
+	if err := CheckSourceIDPrerequisites(sourceId); err != nil {
+		Logger.Error(err.Error())
+		return false
+	}
 	// Enforce min-release-age for updates too (provider Update() implementations call into
 	// provider Install() directly, so this must live in the wrapper).
 	registry := registry_parser.NewDefaultRegistryParser()

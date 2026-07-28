@@ -411,6 +411,24 @@ defaults:
 - macOS: `~/Library/Application Support/nvim`
 - Windows: `%LOCALAPPDATA%\\nvim-data`
 
+### Neovim plugins (nvpm.nvim)
+
+Registry packages with category `Plugin` or `editor_integration: neovim` install under:
+
+```
+<nvpm-data-share>/plugins/<provider>/<owner_repo>/
+```
+
+and are recorded in `nvpm-lock.json` with `extras.kind: "neovim-plugin"`.
+
+```sh
+nvpm add github:folke/tokyonight.nvim          # auto-detected plugin
+nvpm add --plugin neovim github:owner/custom.nvim  # force Neovim plugin install
+nvpm ls --only-plugins
+```
+
+Runtime loading uses [nvpm.nvim](https://github.com/mistweaverco/nvpm.nvim) with lazy.nvim-compatible specs.
+
 ## Supported providers
 
 - `cargo`

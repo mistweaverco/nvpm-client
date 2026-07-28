@@ -162,6 +162,7 @@ type RegistryItemSource struct {
 	ID       string                         `json:"id"`
 	Asset    RegistryItemSourceAssetList    `json:"asset,omitempty"`
 	Download RegistryItemSourceDownloadList `json:"download,omitempty"`
+	Bin      string                         `json:"bin,omitempty"`
 }
 
 // RegistryItemTreeSitterExternalQueries points at a separate repository that only

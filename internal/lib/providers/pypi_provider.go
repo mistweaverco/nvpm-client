@@ -213,13 +213,35 @@ func (p *PyPiProvider) createWrappers() error {
 	return nil
 }
 
-// normalizePyPiBinCommand turns registry bin values like "pypi:yamllint" into the real console script name "yamllint".
-func (p *PyPiProvider) normalizePyPiBinCommand(commandToExec string) string {
+// normalizePyPiBinCommand turns registry bin values like "pypi:yamllint" into the real
+// console script name "yamllint", and "pyvenv:debugpy" into "python3 -m debugpy".
+func (p *PyPiProvider) normalizePyPiBinCommand(commandToExec string) (string, error) {
 	commandToExec = strings.TrimSpace(commandToExec)
 	if strings.HasPrefix(commandToExec, p.PREFIX) {
-		return strings.TrimPrefix(commandToExec, p.PREFIX)
+		return strings.TrimPrefix(commandToExec, p.PREFIX), nil
 	}
-	return commandToExec
+	if strings.HasPrefix(commandToExec, "pyvenv:") {
+		module := strings.TrimSpace(strings.TrimPrefix(commandToExec, "pyvenv:"))
+		if module == "" {
+			return "", fmt.Errorf("empty pyvenv module")
+		}
+		pythonCmd, err := p.pythonCommand()
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s -m %s", pythonCmd, module), nil
+	}
+	return commandToExec, nil
+}
+
+func (p *PyPiProvider) pythonCommand() (string, error) {
+	if pipHasCommand("python3", []string{"--version"}, nil) {
+		return "python3", nil
+	}
+	if pipHasCommand("python", []string{"--version"}, nil) {
+		return "python", nil
+	}
+	return "", fmt.Errorf("python3 or python command not found")
 }
 
 // createPythonWrapperForCommand creates a wrapper that prepares the environment and executes the given command.
@@ -229,7 +251,10 @@ func (p *PyPiProvider) createPythonWrapperForCommand(commandToExec string, wrapp
 	if sitePackagesDir == "" {
 		sitePackagesDir = p.APP_PACKAGES_DIR
 	}
-	commandToExec = p.normalizePyPiBinCommand(commandToExec)
+	commandToExec, err := p.normalizePyPiBinCommand(commandToExec)
+	if err != nil {
+		return err
+	}
 	if commandToExec == "" {
 		return fmt.Errorf("empty command for wrapper %s", wrapperPath)
 	}
@@ -455,26 +480,25 @@ func (p *PyPiProvider) Sync() bool {
 
 	for _, pkg := range desired {
 		name := p.getRepo(pkg.SourceID)
-		if v, ok := installed[name]; !ok || v != pkg.Version {
-			pkgString := fmt.Sprintf("%s==%s", name, pkg.Version)
-			Logger.Info(fmt.Sprintf("PyPI Sync: Installing package %s", pkgString))
-			// Use the current pip command which should be associated with the current Python version
-			installCode, err := pipShellOut(pipCmd, []string{"install", pkgString, "--prefix", p.APP_PACKAGES_DIR}, p.APP_PACKAGES_DIR, nil)
-			if err != nil || installCode != 0 {
-				Logger.Error(fmt.Sprintf("Error installing %s==%s: %v", name, pkg.Version, err))
-				allOk = false
-			} else {
-				installedCount++
-			}
-		} else {
+		if p.isDistributionInstalled(installed, name, pkg.Version) {
 			Logger.Info(fmt.Sprintf("PyPI Sync: Package %s==%s already installed, skipping", name, pkg.Version))
 			skippedCount++
+			continue
+		}
+		pkgString := fmt.Sprintf("%s==%s", name, pkg.Version)
+		Logger.Info(fmt.Sprintf("PyPI Sync: Installing package %s", pkgString))
+		// Use the current pip command which should be associated with the current Python version
+		installCode, err := pipShellOut(pipCmd, []string{"install", pkgString, "--prefix", p.APP_PACKAGES_DIR}, p.APP_PACKAGES_DIR, nil)
+		if err != nil || installCode != 0 {
+			Logger.Error(fmt.Sprintf("Error installing %s==%s: %v", name, pkg.Version, err))
+			allOk = false
+		} else {
+			installedCount++
+			installed[name] = pkg.Version
 		}
 	}
 
-	if allOk {
-		_ = p.createWrappers()
-	}
+	_ = p.createWrappers()
 
 	Logger.Info(fmt.Sprintf("PyPI Sync: Completed - %d packages installed, %d packages skipped", installedCount, skippedCount))
 	return allOk
@@ -484,12 +508,25 @@ func (p *PyPiProvider) Sync() bool {
 func (p *PyPiProvider) areAllPackagesInstalled(desired []local_packages_parser.LocalPackageItem) bool {
 	installed := p.getInstalledPackages()
 	for _, pkg := range desired {
-		name := p.getRepo(pkg.SourceID)
-		if v, ok := installed[name]; !ok || v != pkg.Version {
+		if !p.isDistributionInstalled(installed, p.getRepo(pkg.SourceID), pkg.Version) {
 			return false
 		}
 	}
 	return true
+}
+
+// isDistributionInstalled reports whether name==version is present in a pip freeze map.
+func (p *PyPiProvider) isDistributionInstalled(installed map[string]string, name, version string) bool {
+	if v, ok := installed[name]; ok && v == version {
+		return true
+	}
+	want := normalizeDistributionName(name)
+	for dist, v := range installed {
+		if normalizeDistributionName(dist) == want && v == version {
+			return true
+		}
+	}
+	return false
 }
 
 // getInstalledPackages gets the list of installed packages using pip freeze scoped to this provider's site-packages
@@ -541,7 +578,12 @@ func (p *PyPiProvider) Install(sourceID, version string) bool {
 		Logger.Error(fmt.Sprintf("Error adding package %s to local packages: %v", sourceID, err))
 		return false
 	}
-	return p.Sync()
+	_ = p.Sync()
+	if !p.isDistributionInstalled(p.getInstalledPackages(), p.getRepo(sourceID), version) {
+		_ = lppPyRemove(sourceID)
+		return false
+	}
+	return true
 }
 
 func (p *PyPiProvider) removeBin(sourceID string) error {

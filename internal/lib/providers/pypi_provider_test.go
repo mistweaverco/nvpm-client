@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,7 +117,13 @@ func TestPyPiProviderBasicFlows(t *testing.T) {
 
 	// getLatestVersion parses pip index output
 	pipShellOutCapture = func(cmd string, args []string, dir string, env []string) (int, string, error) {
-		return 0, "Available versions: 2.0.0, 1.0.0, 0.1", nil
+		if cmd == pipCmd && len(args) >= 2 && args[0] == "index" {
+			return 0, "Available versions: 2.0.0, 1.0.0, 0.1", nil
+		}
+		if cmd == pipCmd && len(args) >= 1 && args[0] == "freeze" {
+			return 0, "black==2.0.0\n", nil
+		}
+		return 0, "package==1.0.0\n", nil
 	}
 	v, err := p.getLatestVersion("black")
 	assert.NoError(t, err)
@@ -378,6 +385,83 @@ func TestPyPiCreatePythonWrapper_StripsPypiPrefixFromRegistryBin(t *testing.T) {
 	body := string(data)
 	assert.Contains(t, body, "exec yamllint \"$@\"")
 	assert.NotContains(t, body, "pypi:yamllint")
+}
+
+func TestPyPiCreatePythonWrapper_PyvenvModule(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderPyPi()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	wrapper := filepath.Join(files.GetAppBinPath(), "debugpy")
+	assert.NoError(t, p.createPythonWrapperForCommand("pyvenv:debugpy", wrapper))
+	data, err := os.ReadFile(wrapper)
+	assert.NoError(t, err)
+	body := string(data)
+	assert.Contains(t, body, "exec python3 -m debugpy \"$@\"")
+}
+
+func TestPyPiInstall_SucceedsWhenAnotherLockedPackageFails(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderPyPi()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+
+	_ = lppPyAdd("pkg:pypi/broken", "1.0.0")
+	writeRegistry(t, []registry_parser.RegistryItem{
+		{Name: "broken", Version: "1.0.0", Source: registry_parser.RegistryItemSource{ID: "pkg:pypi/broken"}, Bin: map[string]string{"broken": "pypi:broken"}},
+		{Name: "good", Version: "2.0.0", Source: registry_parser.RegistryItemSource{ID: "pkg:pypi/good"}, Bin: map[string]string{"good": "pypi:good"}},
+	})
+	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
+
+	oldOut := pipShellOut
+	oldCap := pipShellOutCapture
+	pipShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
+		if cmd == pipCmd && len(args) >= 2 && args[0] == "install" {
+			if strings.Contains(args[1], "broken==") {
+				return 1, errors.New("install failed")
+			}
+			return 0, nil
+		}
+		return oldOut(cmd, args, dir, env)
+	}
+	pipShellOutCapture = func(cmd string, args []string, dir string, env []string) (int, string, error) {
+		if cmd == pipCmd && len(args) >= 1 && args[0] == "freeze" {
+			return 0, "good==2.0.0\n", nil
+		}
+		return oldCap(cmd, args, dir, env)
+	}
+	t.Cleanup(func() { pipShellOut = oldOut; pipShellOutCapture = oldCap })
+
+	assert.True(t, p.Install("pkg:pypi/good", "2.0.0"))
+	wrapper := filepath.Join(files.GetAppBinPath(), "good")
+	_, err := os.Stat(wrapper)
+	assert.NoError(t, err)
+}
+
+func TestPyPiInstall_RollsBackLockWhenPackageFails(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderPyPi()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+
+	oldOut := pipShellOut
+	oldCap := pipShellOutCapture
+	pipShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
+		if cmd == pipCmd && len(args) >= 2 && args[0] == "install" {
+			return 1, errors.New("install failed")
+		}
+		return oldOut(cmd, args, dir, env)
+	}
+	pipShellOutCapture = func(cmd string, args []string, dir string, env []string) (int, string, error) {
+		if cmd == pipCmd && len(args) >= 1 && args[0] == "freeze" {
+			return 0, "", nil
+		}
+		return oldCap(cmd, args, dir, env)
+	}
+	t.Cleanup(func() { pipShellOut = oldOut; pipShellOutCapture = oldCap })
+
+	assert.False(t, p.Install("pkg:pypi/missing", "1.0.0"))
+	data := lppPyGetDataForProvider("pypi")
+	for _, pkg := range data.Packages {
+		assert.NotEqual(t, "pkg:pypi/missing", pkg.SourceID)
+	}
 }
 
 func TestPyPiFindPackageInfoDir_ErrorAndContinues(t *testing.T) {

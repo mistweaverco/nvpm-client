@@ -237,11 +237,19 @@ func (p *GenericProvider) getLatestVersion(packageName string) (string, error) {
 	return "", fmt.Errorf("version not found in registry")
 }
 
-// findMatchingDownload finds the download entry that matches the current platform
+// findMatchingDownload finds the download entry that matches the current platform.
+// Downloads without a target apply to all platforms and are used as a last resort.
 func (p *GenericProvider) findMatchingDownload(downloads registry_parser.RegistryItemSourceDownloadList) *registry_parser.RegistryItemSourceDownloadFile {
 	currentTarget := DetectRegistryTarget()
 
+	var untargeted *registry_parser.RegistryItemSourceDownloadFile
 	for i := range downloads {
+		if IsUntargetedAsset(downloads[i].Target) {
+			if untargeted == nil {
+				untargeted = &downloads[i]
+			}
+			continue
+		}
 		if MatchesTarget(downloads[i].Target, currentTarget) {
 			return &downloads[i]
 		}
@@ -257,7 +265,7 @@ func (p *GenericProvider) findMatchingDownload(downloads registry_parser.Registr
 		}
 	}
 
-	return nil
+	return untargeted
 }
 
 // downloadFile downloads a file from a URL to a destination path

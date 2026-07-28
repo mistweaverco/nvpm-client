@@ -280,7 +280,7 @@ func (p *OpenVSXProvider) createSymlinksFromRegistry(publisher, extension, extra
 	nvpmBinDir := files.GetAppBinPath()
 
 	for binName, binTemplate := range registryItem.Bin {
-		binPath := ResolveBinPath(binTemplate, nil, binName)
+		binPath := ResolveBinPath(binTemplate, nil, registryItem.Source.Bin, binName)
 		if binPath == "" {
 			continue
 		}

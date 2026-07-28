@@ -29,13 +29,50 @@ func TestAssetArchiveFileName(t *testing.T) {
 }
 
 func TestParseBinSpec(t *testing.T) {
-	exec, rel := ParseBinSpec("exec:libexec/bin/lua-language-server")
-	assert.True(t, exec)
+	wrapper, rel := ParseBinSpec("exec:libexec/bin/lua-language-server")
+	assert.Equal(t, "exec", wrapper)
 	assert.Equal(t, "libexec/bin/lua-language-server", rel)
 
-	exec, rel = ParseBinSpec("bin/tool")
-	assert.False(t, exec)
+	wrapper, rel = ParseBinSpec("bin/tool")
+	assert.Equal(t, "", wrapper)
 	assert.Equal(t, "bin/tool", rel)
+
+	wrapper, rel = ParseBinSpec("node:js-debug/src/dapDebugServer.js")
+	assert.Equal(t, "node", wrapper)
+	assert.Equal(t, "js-debug/src/dapDebugServer.js", rel)
+}
+
+func TestResolveBinPathSourceBin(t *testing.T) {
+	got := ResolveBinPath("{{source.bin}}", nil, "node:js-debug/src/dapDebugServer.js", "js-debug-adapter")
+	assert.Equal(t, "node:js-debug/src/dapDebugServer.js", got)
+}
+
+func TestLinkReleaseBinsNodeWrapper(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NVPM_HOME", home)
+	_ = files.GetAppBinPath()
+
+	repoPath := filepath.Join(home, "packages", "github", "microsoft_vscode-js-debug")
+	scriptPath := filepath.Join(repoPath, "js-debug", "src", "dapDebugServer.js")
+	require.NoError(t, os.MkdirAll(filepath.Dir(scriptPath), 0o755))
+	require.NoError(t, os.WriteFile(scriptPath, []byte("module.exports = {};\n"), 0o644))
+
+	registryItem := registry_parser.RegistryItem{
+		Source: registry_parser.RegistryItemSource{
+			Bin: "node:js-debug/src/dapDebugServer.js",
+		},
+		Bin: map[string]string{
+			"js-debug-adapter": "{{source.bin}}",
+		},
+	}
+
+	require.NoError(t, LinkReleaseBins(repoPath, nil, registryItem))
+
+	wrapper := filepath.Join(files.GetAppBinPath(), "js-debug-adapter")
+	data, err := os.ReadFile(wrapper)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "exec node")
+	assert.Contains(t, string(data), scriptPath)
 }
 
 func TestInstallReleaseAssetContentsAndLinkReleaseBins(t *testing.T) {
@@ -76,6 +113,34 @@ func TestInstallReleaseAssetContentsAndLinkReleaseBins(t *testing.T) {
 	data, err := os.ReadFile(wrapper)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), installedBin)
+}
+
+func TestFindMatchingAssetUntargeted(t *testing.T) {
+	assets := registry_parser.RegistryItemSourceAssetList{
+		{
+			File: mustAssetFile(t, `"js-debug-dap-{{version}}.tar.gz"`),
+		},
+	}
+
+	asset := FindMatchingAsset(assets)
+	require.NotNil(t, asset)
+	assert.True(t, IsUntargetedAsset(asset.Target))
+}
+
+func TestFindMatchingAssetPrefersTargetedOverUntargeted(t *testing.T) {
+	assets := registry_parser.RegistryItemSourceAssetList{
+		{
+			File: mustAssetFile(t, `"generic.tar.gz"`),
+		},
+		{
+			Target: DetectRegistryTarget(),
+			File:   mustAssetFile(t, `"platform-specific.tar.gz"`),
+		},
+	}
+
+	asset := FindMatchingAsset(assets)
+	require.NotNil(t, asset)
+	assert.Equal(t, "platform-specific.tar.gz", asset.File.String())
 }
 
 func TestFindMatchingAssetLinuxGnuFallback(t *testing.T) {

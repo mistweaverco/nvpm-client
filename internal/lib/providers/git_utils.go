@@ -66,6 +66,17 @@ func DetectRegistryTarget() string {
 	return fmt.Sprintf("%s_%s", osPart, archPart)
 }
 
+// IsUntargetedAsset reports whether an asset/download entry applies to all platforms.
+func IsUntargetedAsset(target interface{}) bool {
+	if target == nil {
+		return true
+	}
+	if str, ok := target.(string); ok {
+		return strings.TrimSpace(str) == ""
+	}
+	return false
+}
+
 // MatchesTarget checks if a registry target matches the current platform
 // target can be a string like "linux_x64" or an array like ["darwin_x64", "darwin_arm64"]
 func MatchesTarget(target interface{}, currentTarget string) bool {
@@ -84,11 +95,19 @@ func MatchesTarget(target interface{}, currentTarget string) bool {
 	}
 }
 
-// FindMatchingAsset finds the asset entry that matches the current platform
+// FindMatchingAsset finds the asset entry that matches the current platform.
+// Assets without a target apply to all platforms and are used as a last resort.
 func FindMatchingAsset(assets registry_parser.RegistryItemSourceAssetList) *registry_parser.RegistryItemSourceAsset {
 	currentTarget := DetectRegistryTarget()
 
+	var untargeted *registry_parser.RegistryItemSourceAsset
 	for i := range assets {
+		if IsUntargetedAsset(assets[i].Target) {
+			if untargeted == nil {
+				untargeted = &assets[i]
+			}
+			continue
+		}
 		if MatchesTarget(assets[i].Target, currentTarget) {
 			return &assets[i]
 		}
@@ -104,7 +123,7 @@ func FindMatchingAsset(assets registry_parser.RegistryItemSourceAssetList) *regi
 		}
 	}
 
-	return nil
+	return untargeted
 }
 
 // ResolveTemplate resolves template variables in strings
@@ -143,10 +162,15 @@ func extractBinFromAsset(bin interface{}, binName string) string {
 // ResolveBinPath resolves the binary path from registry bin template
 // Examples: "{{source.asset.bin}}" -> "shellcheck"
 //
+//	"{{source.bin}}" -> "node:js-debug/src/dapDebugServer.js"
 //	"{{source.asset.file}}" -> "latexindent-macos"
 //	"{{source.asset.bin.protolint}}" -> "protolint"
-func ResolveBinPath(binTemplate string, asset *registry_parser.RegistryItemSourceAsset, binName string) string {
+func ResolveBinPath(binTemplate string, asset *registry_parser.RegistryItemSourceAsset, sourceBin, binName string) string {
 	result := binTemplate
+
+	if strings.Contains(result, "{{source.bin}}") {
+		result = strings.ReplaceAll(result, "{{source.bin}}", sourceBin)
+	}
 
 	// Handle {{source.asset.bin}}
 	if strings.Contains(result, "{{source.asset.bin}}") {
@@ -199,12 +223,15 @@ func AssetArchiveFileName(file registry_parser.RegistryItemSourceAssetFile, vers
 }
 
 // ParseBinSpec parses a registry bin path. Paths prefixed with "exec:" are executed
-// via a wrapper script; other paths are symlinked directly.
-func ParseBinSpec(binPath string) (exec bool, relPath string) {
+// via a wrapper script; paths prefixed with "node:" run via `node`; other paths are symlinked.
+func ParseBinSpec(binPath string) (wrapper string, relPath string) {
 	if strings.HasPrefix(binPath, "exec:") {
-		return true, strings.TrimPrefix(binPath, "exec:")
+		return "exec", strings.TrimPrefix(binPath, "exec:")
 	}
-	return false, binPath
+	if strings.HasPrefix(binPath, "node:") {
+		return "node", strings.TrimPrefix(binPath, "node:")
+	}
+	return "", binPath
 }
 
 // InstallReleaseAssetContents copies extracted release contents into the package directory.
@@ -226,12 +253,12 @@ func LinkReleaseBins(repoPath string, asset *registry_parser.RegistryItemSourceA
 	nvpmBinDir := files.GetAppBinPath()
 
 	for binName, binTemplate := range registryItem.Bin {
-		binPath := ResolveBinPath(binTemplate, asset, binName)
+		binPath := ResolveBinPath(binTemplate, asset, registryItem.Source.Bin, binName)
 		if binPath == "" {
 			continue
 		}
 
-		isExec, relPath := ParseBinSpec(binPath)
+		wrapper, relPath := ParseBinSpec(binPath)
 		targetPath := filepath.Join(repoPath, filepath.Clean(relPath))
 		if _, err := os.Stat(targetPath); err != nil {
 			if found := findBinaryInTree(repoPath, filepath.Base(relPath)); found != "" {
@@ -247,25 +274,32 @@ func LinkReleaseBins(repoPath string, asset *registry_parser.RegistryItemSourceA
 			_ = os.Remove(linkPath)
 		}
 
-		if isExec {
-			wrapper := fmt.Sprintf("#!/bin/sh\nexec %q \"$@\"\n", targetPath)
-			if err := os.WriteFile(linkPath, []byte(wrapper), 0755); err != nil {
+		switch wrapper {
+		case "exec":
+			script := fmt.Sprintf("#!/bin/sh\nexec %q \"$@\"\n", targetPath)
+			if err := os.WriteFile(linkPath, []byte(script), 0755); err != nil {
 				Logger.Info(fmt.Sprintf("Release install: warning creating wrapper %s: %v", linkPath, err))
 				continue
 			}
 			Logger.Info(fmt.Sprintf("Release install: Created wrapper %s -> %s", linkPath, targetPath))
-			continue
+		case "node":
+			script := fmt.Sprintf("#!/bin/sh\nexec node %q \"$@\"\n", targetPath)
+			if err := os.WriteFile(linkPath, []byte(script), 0755); err != nil {
+				Logger.Info(fmt.Sprintf("Release install: warning creating wrapper %s: %v", linkPath, err))
+				continue
+			}
+			Logger.Info(fmt.Sprintf("Release install: Created node wrapper %s -> %s", linkPath, targetPath))
+		default:
+			relLink, err := filepath.Rel(nvpmBinDir, targetPath)
+			if err != nil {
+				relLink = targetPath
+			}
+			if err := os.Symlink(relLink, linkPath); err != nil {
+				Logger.Info(fmt.Sprintf("Release install: warning creating symlink %s -> %s: %v", linkPath, relLink, err))
+				continue
+			}
+			Logger.Info(fmt.Sprintf("Release install: Created symlink %s -> %s", linkPath, relLink))
 		}
-
-		relLink, err := filepath.Rel(nvpmBinDir, targetPath)
-		if err != nil {
-			relLink = targetPath
-		}
-		if err := os.Symlink(relLink, linkPath); err != nil {
-			Logger.Info(fmt.Sprintf("Release install: warning creating symlink %s -> %s: %v", linkPath, relLink, err))
-			continue
-		}
-		Logger.Info(fmt.Sprintf("Release install: Created symlink %s -> %s", linkPath, relLink))
 	}
 
 	return nil

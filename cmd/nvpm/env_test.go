@@ -11,7 +11,7 @@ import (
 
 func TestEnvCommand(t *testing.T) {
 	t.Run("env command structure", func(t *testing.T) {
-		assert.Equal(t, "env", envCmd.Use)
+		assert.Equal(t, "env [shell]", envCmd.Use)
 		assert.Contains(t, envCmd.Short, "Outputs a script")
 		assert.NotEmpty(t, envCmd.Long)
 	})
@@ -92,6 +92,47 @@ func TestEnvCommand(t *testing.T) {
 
 		assert.Contains(t, out, "$env:PATH")
 		assert.Contains(t, out, "nvpm")
+	})
+
+	t.Run("env command with fish arg", func(t *testing.T) {
+		old := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+
+		envCmd.Run(envCmd, []string{"fish"})
+
+		w.Close()
+		os.Stdout = old
+		var buf bytes.Buffer
+		io.Copy(&buf, r)
+		out := buf.String()
+
+		assert.Contains(t, out, "nvpm shell setup")
+		assert.Contains(t, out, "if not contains --")
+		assert.Contains(t, out, "set -x PATH")
+		assert.NotContains(t, out, "export PATH")
+		assert.NotContains(t, out, "#!/bin/sh")
+	})
+
+	t.Run("env command with zsh arg uses posix script", func(t *testing.T) {
+		old := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+
+		envCmd.Run(envCmd, []string{"zsh"})
+
+		w.Close()
+		os.Stdout = old
+		var buf bytes.Buffer
+		io.Copy(&buf, r)
+		out := buf.String()
+
+		assert.Contains(t, out, "#!/bin/sh")
+		assert.Contains(t, out, "export PATH")
+	})
+
+	t.Run("env command accepts supported shells as ValidArgs", func(t *testing.T) {
+		assert.Equal(t, []string{"bash", "zsh", "fish", "pwsh", "powershell"}, envCmd.ValidArgs)
 	})
 
 	t.Run("env command with too many args triggers error", func(t *testing.T) {

@@ -139,6 +139,14 @@ add to `~/.zshrc`:
 _evalcache nvpm env zsh
 ```
 
+#### fish environment setup
+
+add to `~/.config/fish/config.fish`:
+
+```fish
+nvpm env fish | source
+```
+
 #### PowerShell environment setup
 
 add to `profile`:
@@ -170,11 +178,13 @@ source <(nvpm completion zsh)
 
 #### fish autocompletion setup
 
-add to `~/.config/fish/completions/nvpm.fish`:
+generate the completion script once:
 
-```sh
+```fish
 nvpm completion fish > ~/.config/fish/completions/nvpm.fish
 ```
+
+Fish loads completions from that directory automatically.
 
 #### powershell autocompletion setup
 

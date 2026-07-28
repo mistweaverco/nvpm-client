@@ -9,12 +9,14 @@ import (
 )
 
 var envCmd = &cobra.Command{
-	Use:   "env",
+	Use:   "env [shell]",
 	Short: "Outputs a script to set environment variables for the current shell",
 	Long: `The env command outputs a script that sets environment variables for the current shell.
                This command takes one argument, the shell.
+               Supported shells: bash, zsh, fish, pwsh, powershell.
                If omitted, it will default to bash.`,
-	Args: cobra.MaximumNArgs(1),
+	Args:      cobra.MaximumNArgs(1),
+	ValidArgs: []string{"bash", "zsh", "fish", "pwsh", "powershell"},
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) > 1 {
 			log.Fatalln("Too many arguments. The env command takes at most one argument.")
@@ -24,9 +26,17 @@ var envCmd = &cobra.Command{
 			shell = args[0]
 		}
 		pathString := files.GetAppBinPath()
-		if shell == "pwsh" || shell == "powershell" {
+		switch shell {
+		case "pwsh", "powershell":
 			fmt.Println(`$env:PATH = "` + pathString + `;" + $env:PATH`)
-		} else {
+		case "fish":
+			fmt.Println(`# nvpm shell setup; adapted from rustup
+if not contains -- "` + pathString + `" $PATH
+    # Prepending path in case a system-installed nvpm executable needs to be overridden
+    set -x PATH "` + pathString + `" $PATH
+end`)
+		default:
+			// bash, zsh, and other POSIX-compatible shells
 			fmt.Println(`#!/bin/sh
 # nvpm shell setup; adapted from rustup
 # affix colons on either side of $PATH to simplify matching

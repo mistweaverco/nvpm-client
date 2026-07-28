@@ -16,19 +16,14 @@
 [Requirements](#requirements) •
 [Install](#install) •
 [Usage](#usage) •
-[Supported providers](#supported-providers)
-
-<p></p>
-
-![NVPM Demo](assets/demo.webp)
+[Supported providers](#supported-providers) •
+[Screenshots](#screenshots)
 
 <p></p>
 
 NVPM 🌈 aims to be an editor-agnostic 🫶 package manager 📦 for
 Tree-sitter parsers, LSP servers, DAP servers,
 linters and formatters and more.
-
-
 
 <p></p>
 
@@ -445,6 +440,28 @@ Runtime loading uses [nvpm.nvim](https://github.com/mistweaverco/nvpm.nvim) with
 - `opam`
 - `openvsx`
 - `pypi`
+
+## Screenshots
+
+<div align="center">
+
+### List installed packges demo
+
+![list installed packages demo](https://nvpm.dev/assets/tapes/cli/list/installed.gif)
+
+### List installed and outdated packges demo
+
+![list installed and outdated packages demo](https://nvpm.dev/assets/tapes/cli/list/installed-outdated.gif)
+
+### List all packges demo
+
+![list all packages demo](https://nvpm.dev/assets/tapes/cli/list/all.gif)
+
+### Add packages demo
+
+![add packages demo](https://nvpm.dev/assets/tapes/cli/add/integrate-neovim.gif)
+
+</div>
 
 
 

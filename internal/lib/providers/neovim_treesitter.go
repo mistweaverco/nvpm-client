@@ -380,6 +380,7 @@ func neovimBundledQueriesPresent(lang string) (bool, error) {
 		"--clean",
 		"--headless",
 		"-i", "NONE",
+		"-u", "NONE",
 		"-c", script,
 		"-c", "qa",
 	}, "", nil)
@@ -401,6 +402,8 @@ func detectNeovimDataPath() (string, error) {
 	// Prefer Neovim itself: this respects OS + user overrides.
 	if code, out, err := neovimShellOutCapture("nvim", []string{
 		"--headless",
+		"-i", "NONE",
+		"-u", "NONE",
 		"+lua io.write(vim.fn.stdpath('data'))",
 		"+q",
 	}, "", nil); err == nil && code == 0 {

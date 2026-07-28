@@ -1,4 +1,0 @@
-WRN 2026-05-14T16:11:49.921 ?.65480    socket_watcher_start:177: Failed to remove stale socket /run/user/1000/nvim.65480.0: no such file or directory
-WRN 2026-05-14T16:11:49.921 ?.65480    server_start:197: Failed to start server: no such file or directory: /run/user/1000/
-WRN 2026-05-14T16:11:50.032 ?.65480    socket_watcher_start:177: Failed to remove stale socket /run/user/1000/fzf-lua.1778767910.65480.1: no such file or directory
-WRN 2026-05-14T16:11:50.032 ?.65480    server_start:197: Failed to start server: no such file or directory: /run/user/1000/

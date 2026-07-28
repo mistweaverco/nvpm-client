@@ -126,6 +126,66 @@ func TestPathFunctionsComprehensive(t *testing.T) {
 		assert.Equal(t, "/custom/nvpm/home", path)
 	})
 
+	t.Run("get app data share path with NVPM_HOME set", func(t *testing.T) {
+		mockFS := &MockFileSystem{
+			fs: afero.NewMemMapFs(),
+			GetenvFunc: func(key string) string {
+				if key == "NVPM_HOME" {
+					return "/custom/nvpm/home"
+				}
+				return ""
+			},
+			UserHomeDirFunc: func() (string, error) { return "/home/user", nil },
+			UserConfigDirFunc: func() (string, error) {
+				return "/home/user/.config", nil
+			},
+		}
+		SetFileSystem(mockFS)
+		defer ResetDependencies()
+
+		assert.Equal(t, "/custom/nvpm/home", GetAppDataSharePath())
+	})
+
+	t.Run("get app packages path with NVPM_HOME set", func(t *testing.T) {
+		mockFS := &MockFileSystem{
+			fs: afero.NewMemMapFs(),
+			GetenvFunc: func(key string) string {
+				if key == "NVPM_HOME" {
+					return "/custom/nvpm/home"
+				}
+				return ""
+			},
+			UserHomeDirFunc: func() (string, error) { return "/home/user", nil },
+			UserConfigDirFunc: func() (string, error) {
+				return "/home/user/.config", nil
+			},
+		}
+		SetFileSystem(mockFS)
+		defer ResetDependencies()
+
+		assert.Equal(t, "/custom/nvpm/home/packages", GetAppPackagesPath())
+	})
+
+	t.Run("get app bin path with NVPM_HOME set", func(t *testing.T) {
+		mockFS := &MockFileSystem{
+			fs: afero.NewMemMapFs(),
+			GetenvFunc: func(key string) string {
+				if key == "NVPM_HOME" {
+					return "/custom/nvpm/home"
+				}
+				return ""
+			},
+			UserHomeDirFunc: func() (string, error) { return "/home/user", nil },
+			UserConfigDirFunc: func() (string, error) {
+				return "/home/user/.config", nil
+			},
+		}
+		SetFileSystem(mockFS)
+		defer ResetDependencies()
+
+		assert.Equal(t, "/custom/nvpm/home/bin", GetAppBinPath())
+	})
+
 	t.Run("get app data path without NVPM_HOME", func(t *testing.T) {
 		// Create an in-memory filesystem for testing
 		mockFS := &MockFileSystem{
@@ -143,6 +203,24 @@ func TestPathFunctionsComprehensive(t *testing.T) {
 		// Test that it uses user config dir when NVPM_HOME is not set
 		path := GetAppDataPath()
 		assert.Equal(t, "/home/user/.config/nvpm", path)
+	})
+
+	t.Run("get app packages and bin paths without NVPM_HOME on Linux", func(t *testing.T) {
+		mockFS := &MockFileSystem{
+			fs: afero.NewMemMapFs(),
+			GetenvFunc: func(key string) string {
+				return ""
+			},
+			UserHomeDirFunc: func() (string, error) { return "/home/user", nil },
+			UserConfigDirFunc: func() (string, error) {
+				return "/home/user/.config", nil
+			},
+		}
+		SetFileSystem(mockFS)
+		defer ResetDependencies()
+
+		assert.Equal(t, "/home/user/.local/share/nvpm/packages", GetAppPackagesPath())
+		assert.Equal(t, "/home/user/.local/share/nvpm/bin", GetAppBinPath())
 	})
 
 	t.Run("path separator with different separators", func(t *testing.T) {

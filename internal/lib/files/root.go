@@ -229,6 +229,7 @@ func GetAppRegistryFilePath() string {
 }
 
 // GetAppPackagesPath returns the path to the packages directory
+// If the NVPM_HOME environment variable is set, it will use $NVPM_HOME/packages
 // Otherwise:
 //   - Linux: ~/.local/share/nvpm/packages
 //   - macOS: ~/Library/Application Support/nvpm/packages
@@ -238,12 +239,17 @@ func GetAppPackagesPath() string {
 }
 
 // GetAppDataSharePath returns the path to the app data share directory
+// If the NVPM_HOME environment variable is set, it will use that path
 // This is separate from the config directory and follows XDG Base Directory spec
 // Otherwise:
 //   - Linux: ~/.local/share/nvpm
 //   - macOS: ~/Library/Application Support/nvpm (same as config)
 //   - Windows: %APPDATA%\nvpm (same as config)
 func GetAppDataSharePath() string {
+	if nvpmHome := fileSystem.Getenv("NVPM_HOME"); nvpmHome != "" {
+		return EnsureDirExists(nvpmHome)
+	}
+
 	// On Linux, use ~/.local/share, otherwise use config dir (macOS/Windows)
 	userConfigDir, err := fileSystem.UserConfigDir()
 	if err != nil {
@@ -266,6 +272,7 @@ func GetAppDataSharePath() string {
 }
 
 // GetAppBinPath returns the path to the bin directory
+// If the NVPM_HOME environment variable is set, it will use $NVPM_HOME/bin
 // Otherwise:
 //   - Linux: ~/.local/share/nvpm/bin
 //   - macOS: ~/Library/Application Support/nvpm/bin

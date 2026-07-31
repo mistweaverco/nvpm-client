@@ -81,10 +81,22 @@ func (p *GitHubProvider) packagesDir(sourceID string) string {
 	return p.APP_PACKAGES_DIR
 }
 
+func (p *GitHubProvider) alternatePackagesDir(sourceID string) string {
+	if IsEditorPluginPackage(sourceID) {
+		return p.APP_PACKAGES_DIR
+	}
+	return filepath.Join(files.GetAppNeovimPluginsPath(), p.PROVIDER_NAME)
+}
+
 func (p *GitHubProvider) getRepoPath(sourceID, repo string) string {
 	// Sanitize repo path for filesystem (replace / with _)
 	safeRepo := strings.ReplaceAll(repo, "/", "_")
-	return filepath.Join(p.packagesDir(sourceID), safeRepo)
+	return resolveInstalledGitRepoPath(
+		p.packagesDir(sourceID),
+		p.alternatePackagesDir(sourceID),
+		safeRepo,
+		githubStat,
+	)
 }
 
 func (p *GitHubProvider) checkGitAvailable() bool {

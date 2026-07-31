@@ -82,11 +82,23 @@ func (p *GitLabProvider) packagesDir(sourceID string) string {
 	return p.APP_PACKAGES_DIR
 }
 
+func (p *GitLabProvider) alternatePackagesDir(sourceID string) string {
+	if IsEditorPluginPackage(sourceID) {
+		return p.APP_PACKAGES_DIR
+	}
+	return filepath.Join(files.GetAppNeovimPluginsPath(), p.PROVIDER_NAME)
+}
+
 func (p *GitLabProvider) getRepoPath(sourceID, repo string) string {
 	// Sanitize repo path for filesystem (replace / with _)
 	// GitLab paths can be deeply nested like group/subgroup/project
 	safeRepo := strings.ReplaceAll(repo, "/", "_")
-	return filepath.Join(p.packagesDir(sourceID), safeRepo)
+	return resolveInstalledGitRepoPath(
+		p.packagesDir(sourceID),
+		p.alternatePackagesDir(sourceID),
+		safeRepo,
+		gitlabStat,
+	)
 }
 
 func (p *GitLabProvider) checkGitAvailable() bool {

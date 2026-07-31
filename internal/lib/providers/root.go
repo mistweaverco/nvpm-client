@@ -350,6 +350,13 @@ func ResolveVersion(sourceId string, version string) (string, error) {
 		if registryItem.Version != "" {
 			return registryItem.Version, nil
 		}
+
+		// Non-registry git packages: prefer-branch-over-release via remote discovery.
+		if IsGitHostedSourceID(sourceId) {
+			if ref, err := ResolveGitLatestRef(sourceId); err == nil && strings.TrimSpace(ref) != "" {
+				return strings.TrimSpace(ref), nil
+			}
+		}
 	}
 
 	provider := detectProvider(sourceId)
@@ -412,12 +419,13 @@ func ResolveVersion(sourceId string, version string) (string, error) {
 }
 
 func Install(sourceId string, version string) bool {
+	ClearLastError()
 	if err := CheckSourceIDPrerequisites(sourceId); err != nil {
-		Logger.Error(err.Error())
+		logAndSetError(err.Error())
 		return false
 	}
 	if err := enforceMinReleaseAge(sourceId, version); err != nil {
-		Logger.Error(err.Error())
+		logAndSetError(err.Error())
 		return false
 	}
 	provider := detectProvider(sourceId)

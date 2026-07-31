@@ -260,29 +260,19 @@ func (p *GitHubProvider) gitCloneAndCheckout(sourceID, repo, version string) (re
 	resolvedVersion = version
 	if resolvedVersion == "" || resolvedVersion == "latest" {
 		var err error
-		resolvedVersion, err = p.getLatestVersionFromRepo(repoPath)
-		if err != nil {
+		resolvedVersion, err = ResolveGitLatestRef(sourceID)
+		if err != nil || strings.TrimSpace(resolvedVersion) == "" {
 			Logger.Info(fmt.Sprintf("GitHub Install: Could not determine latest version, using default branch: %v", err))
 			resolvedVersion = p.getDefaultBranch(repo, repoPath)
 		}
 	}
 
-	code, err := githubShellOut("git", []string{"checkout", resolvedVersion}, repoPath, nil)
-	if err != nil || code != 0 {
-		if IsGenericDefaultBranchAlias(resolvedVersion) {
-			defaultBranch := p.getDefaultBranch(repo, repoPath)
-			if defaultBranch != "" && defaultBranch != resolvedVersion {
-				code, err = githubShellOut("git", []string{"checkout", defaultBranch}, repoPath, nil)
-				if err == nil && code == 0 {
-					resolvedVersion = defaultBranch
-				}
-			}
-		}
-	}
-	if err != nil || code != 0 {
-		Logger.Error(fmt.Sprintf("GitHub Install: Error checking out version %s: %v", resolvedVersion, err))
+	checkedOut, checkoutErr := gitCheckoutRefWithBranchFallback(githubShellOut, repoPath, resolvedVersion, p.getDefaultBranch(repo, repoPath))
+	if checkoutErr != nil {
+		Logger.Error(fmt.Sprintf("GitHub Install: Error checking out version %s: %v", resolvedVersion, checkoutErr))
 		return "", "", false
 	}
+	resolvedVersion = checkedOut
 
 	return repoPath, resolvedVersion, true
 }

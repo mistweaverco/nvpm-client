@@ -275,6 +275,9 @@ Examples:
 				successCount++
 			} else {
 				service.output.Printf("%s Failed to update %s\n", IconClose(), displayID)
+				if detail := strings.TrimSpace(providers.TakeLastError()); detail != "" {
+					service.output.Printf("  %s\n", detail)
+				}
 				failedCount++
 				allSuccess = false
 			}
@@ -371,6 +374,9 @@ func (us *UpdateService) UpdateAllPackages() bool {
 		} else {
 			failedCount++
 			us.output.Printf("%s Failed to update %s\n", IconClose(), pkg.SourceID)
+			if detail := strings.TrimSpace(providers.TakeLastError()); detail != "" {
+				us.output.Printf("  %s\n", detail)
+			}
 			allSuccess = false
 		}
 	}

@@ -1,11 +1,14 @@
 package providers
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/mistweaverco/nvpm-client/internal/config"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 	"github.com/mistweaverco/nvpm-client/internal/lib/spinnerutil"
 )
@@ -292,9 +295,99 @@ func SetDiscoverGitRemoteLatestForTest(fn func(sourceID, installedVersion string
 	return func() { discoverGitRemoteLatestFn = prev }
 }
 
+// resolvePreferredBranchTip picks among configured preferred branches that exist remotely.
+// If multiple exist, the tip with the newer upstream commit date wins; if dates are
+// unavailable, the first configured branch that resolves is used.
+func resolvePreferredBranchTip(sourceID, repoURL string, branches []string) (branch, commit string, ok bool) {
+	type candidate struct {
+		name   string
+		commit string
+		date   time.Time
+	}
+	var found []candidate
+	for _, name := range branches {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		c, err := gitLsRemoteResolveCommit(repoURL, name)
+		if err != nil || c == "" {
+			continue
+		}
+		var d time.Time
+		if t, dateErr := fetchGitCommitDateFn(sourceID, c); dateErr == nil {
+			d = t
+		}
+		found = append(found, candidate{name: name, commit: c, date: d})
+	}
+	if len(found) == 0 {
+		return "", "", false
+	}
+	best := found[0]
+	for _, c := range found[1:] {
+		switch {
+		case !c.date.IsZero() && !best.date.IsZero():
+			if c.date.After(best.date) {
+				best = c
+			}
+		case !c.date.IsZero() && best.date.IsZero():
+			best = c
+		}
+		// else keep best (earlier in config order)
+	}
+	return best.name, best.commit, true
+}
+
+func resolveInstalledOrDefaultBranch(repoURL, installedVersion string) (ref, commit string, err error) {
+	ref = strings.TrimSpace(installedVersion)
+	switch {
+	case ref == "" || ref == "latest" || isGitCommitSHA(ref):
+		ref = ResolveGitDefaultBranch(repoURL, "")
+	case IsGenericDefaultBranchAlias(ref):
+		if c, resolveErr := gitLsRemoteResolveCommit(repoURL, ref); resolveErr == nil && c != "" {
+			return ref, c, nil
+		}
+		ref = ResolveGitDefaultBranch(repoURL, "")
+	}
+	c, resolveErr := gitLsRemoteResolveCommit(repoURL, ref)
+	if resolveErr != nil {
+		return "", "", resolveErr
+	}
+	return ref, c, nil
+}
+
+// ResolveGitLatestRef resolves the preferred latest ref (tag or branch) for a git-hosted
+// source ID. Registry packages keep the curated registry version. Non-registry packages
+// use cached remote_latest or DiscoverGitRemoteLatest (prefer-branch-over-release).
+func ResolveGitLatestRef(sourceID string) (string, error) {
+	sourceID = strings.TrimSpace(sourceID)
+	if !IsGitHostedSourceID(sourceID) {
+		return "", fmt.Errorf("not a git-hosted source id: %s", sourceID)
+	}
+	registry := registry_parser.NewDefaultRegistryParser()
+	if item := registry.GetBySourceId(sourceID); strings.TrimSpace(item.Version) != "" {
+		return strings.TrimSpace(item.Version), nil
+	}
+	if entry, ok, err := GetRemoteLatest(sourceID); err == nil && ok {
+		if v := strings.TrimSpace(entry.Version); v != "" {
+			return v, nil
+		}
+	}
+	ver, _, err := discoverGitRemoteLatestFn(sourceID, "latest")
+	if err != nil {
+		return "", err
+	}
+	ver = strings.TrimSpace(ver)
+	if ver == "" {
+		return "", fmt.Errorf("cannot resolve latest ref for %s", sourceID)
+	}
+	return ver, nil
+}
+
 // DiscoverGitRemoteLatest resolves the latest remote version and commit for a git-hosted package.
-// It prefers the newest semver tag from `git ls-remote --tags`; if none exist, it resolves
-// HEAD of the installed branch ref (or the repository default branch).
+// It considers the newest semver tag and preferred branch tips, then applies the
+// prefer-branch-over-release policy (default: prefer branch when the tag is ≥60d old
+// and the branch tip is newer by upstream date).
 func DiscoverGitRemoteLatest(sourceID, installedVersion string) (version, commit string, err error) {
 	if !IsGitHostedSourceID(sourceID) {
 		return "", "", fmt.Errorf("not a git-hosted source id: %s", sourceID)
@@ -304,33 +397,50 @@ func DiscoverGitRemoteLatest(sourceID, installedVersion string) (version, commit
 		return "", "", err
 	}
 
+	policy := GetPreferBranchPolicy()
+	now := time.Now()
+
+	var (
+		tagName   string
+		tagCommit string
+		hasTag    bool
+	)
 	code, out, lsErr := gitDiscoveryShellOutCapture("git", []string{"ls-remote", "--tags", repoURL}, "", nil)
 	if lsErr == nil && code == 0 {
 		if tag, ok := pickLatestSemverTag(out); ok {
 			c, resolveErr := gitLsRemoteResolveCommit(repoURL, tag)
 			if resolveErr == nil && c != "" {
-				return tag, c, nil
+				tagName, tagCommit, hasTag = tag, c, true
 			}
 		}
 	}
 
-	ref := strings.TrimSpace(installedVersion)
-	switch {
-	case ref == "" || ref == "latest" || isGitCommitSHA(ref):
-		ref = ResolveGitDefaultBranch(repoURL, "")
-	case IsGenericDefaultBranchAlias(ref):
-		// Keep the installed alias if it resolves; otherwise fall back to the real default.
-		if c, resolveErr := gitLsRemoteResolveCommit(repoURL, ref); resolveErr == nil && c != "" {
-			return ref, c, nil
+	branchName, branchCommit, hasBranch := resolvePreferredBranchTip(sourceID, repoURL, policy.Branches)
+
+	var tagTime, branchTime time.Time
+	needDates := hasTag && hasBranch && policy.Kind != config.PreferBranchWhenAlways
+	if needDates {
+		if t, dateErr := fetchGitCommitDateFn(sourceID, tagCommit); dateErr == nil {
+			tagTime = t
 		}
-		ref = ResolveGitDefaultBranch(repoURL, "")
+		if t, dateErr := fetchGitCommitDateFn(sourceID, branchCommit); dateErr == nil {
+			branchTime = t
+		}
 	}
 
-	c, resolveErr := gitLsRemoteResolveCommit(repoURL, ref)
-	if resolveErr != nil {
-		return "", "", resolveErr
+	decision := DecidePreferBranch(policy, now, hasTag, tagTime, hasBranch, branchTime)
+	if decision.UseBranch && hasBranch {
+		return branchName, branchCommit, nil
 	}
-	return ref, c, nil
+	if hasTag && !decision.UseBranch {
+		return tagName, tagCommit, nil
+	}
+	if hasBranch {
+		return branchName, branchCommit, nil
+	}
+
+	// Fall back to installed / default branch when no preferred branch and no tag.
+	return resolveInstalledOrDefaultBranch(repoURL, installedVersion)
 }
 
 // DiscoverNonRegistryGitPackages remotely discovers latest versions for installed git-hosted
@@ -338,6 +448,15 @@ func DiscoverGitRemoteLatest(sourceID, installedVersion string) (version, commit
 // (remote_latest + first_seen). Call only when the registry snapshot was rebuilt.
 // When showProgress is true, each package is discovered behind its own CLI spinner.
 func DiscoverNonRegistryGitPackages(packages []local_packages_parser.LocalPackageItem, inRegistry func(sourceID string) bool, showProgress bool) error {
+	return DiscoverNonRegistryGitPackagesContext(context.Background(), packages, inRegistry, showProgress)
+}
+
+// DiscoverNonRegistryGitPackagesContext is like DiscoverNonRegistryGitPackages but stops early
+// when ctx is canceled (e.g. Ctrl+C). Partial remote_latest / first_seen updates are persisted.
+func DiscoverNonRegistryGitPackagesContext(ctx context.Context, packages []local_packages_parser.LocalPackageItem, inRegistry func(sourceID string) bool, showProgress bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !discoveryWritesEnabled || len(packages) == 0 {
 		return nil
 	}
@@ -365,8 +484,13 @@ func DiscoverNonRegistryGitPackages(packages []local_packages_parser.LocalPackag
 
 	pairs := make([]DiscoveryPair, 0)
 	changed := false
+	interrupted := false
 	total := len(candidates)
 	for i, pkg := range candidates {
+		if err := ctx.Err(); err != nil {
+			interrupted = true
+			break
+		}
 		id := strings.TrimSpace(pkg.SourceID)
 
 		var (
@@ -378,7 +502,10 @@ func DiscoverNonRegistryGitPackages(packages []local_packages_parser.LocalPackag
 			ver, commit, discErr = discoverGitRemoteLatestFn(id, pkg.Version)
 		}
 		if showProgress {
-			_ = spinnerutil.Run(fmt.Sprintf("(%d/%d) Discovering non-registry package %s", i+1, total, id), action)
+			if spinErr := spinnerutil.Run(fmt.Sprintf("(%d/%d) Discovering non-registry package %s", i+1, total, id), action); spinnerutil.IsInterrupted(spinErr) {
+				interrupted = true
+				break
+			}
 		} else {
 			action()
 		}
@@ -414,8 +541,16 @@ func DiscoverNonRegistryGitPackages(packages []local_packages_parser.LocalPackag
 		changed = true
 	}
 
-	if !changed {
-		return nil
+	if changed {
+		if writeErr := writeDiscoveryDB(db); writeErr != nil {
+			return writeErr
+		}
 	}
-	return writeDiscoveryDB(db)
+	if interrupted {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return context.Canceled
+	}
+	return nil
 }

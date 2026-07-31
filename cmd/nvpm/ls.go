@@ -353,6 +353,62 @@ func (ls *ListService) gitDiscoveredRefsFromDB(sourceID string) ([]gitDiscovered
 	return out, nil
 }
 
+func formatDaysAgo(age time.Duration) string {
+	if age < 0 {
+		age = 0
+	}
+	days := int(age / (24 * time.Hour))
+	if days == 1 {
+		return "1 day ago"
+	}
+	return fmt.Sprintf("%d days ago", days)
+}
+
+// formatDiscoveredVersion formats a discovered version for display with local first-seen age.
+func formatDiscoveredVersion(display string, firstSeen, now time.Time) string {
+	display = strings.TrimSpace(display)
+	if display == "" {
+		return display
+	}
+	if firstSeen.IsZero() {
+		return display
+	}
+	return fmt.Sprintf("%s (%s)", display, formatDaysAgo(now.Sub(firstSeen)))
+}
+
+func shortGitSHA(commit string) string {
+	commit = strings.TrimSpace(commit)
+	if len(commit) >= 7 {
+		return commit[:7]
+	}
+	return commit
+}
+
+func isPreferBranchRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return false
+	}
+	if providers.IsGenericDefaultBranchAlias(ref) {
+		return true
+	}
+	for _, b := range providers.GetPreferBranchPolicy().Branches {
+		if strings.EqualFold(strings.TrimSpace(b), ref) {
+			return true
+		}
+	}
+	return false
+}
+
+func commitMatchesRef(fullCommit, avail string) bool {
+	fullCommit = strings.ToLower(strings.TrimSpace(fullCommit))
+	avail = strings.ToLower(strings.TrimSpace(avail))
+	if fullCommit == "" || avail == "" {
+		return false
+	}
+	return fullCommit == avail || strings.HasPrefix(fullCommit, avail)
+}
+
 func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, installedCommit string) discoveryDisplay {
 	stable, prerelease := ls.registry.GetLatestVersions(sourceID)
 	if stable == "" && prerelease == "" {
@@ -411,7 +467,7 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 			)
 			for _, r := range refs {
 				if r.Ref != "" {
-					// tag+commit entry
+					// tag+commit or branch+commit entry
 					if r.Ref == v {
 						if !found || r.FirstSeen.After(foundFirstSeen) {
 							found = true
@@ -422,7 +478,7 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 					continue
 				}
 				// commit-only entry
-				if r.Commit == v {
+				if commitMatchesRef(r.Commit, v) {
 					if !found || r.FirstSeen.After(foundFirstSeen) {
 						found = true
 						foundCommit = r.Commit
@@ -434,11 +490,20 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 				continue
 			}
 
-			version := v
-			if providers.IsGitCommitHash(version) {
-				version = version[:7]
+			// Eligible / Available-style bare label (tag, branch name, or short SHA).
+			eligibleLabel := v
+			if providers.IsGitCommitHash(eligibleLabel) {
+				eligibleLabel = eligibleLabel[:7]
 			}
-			out.Discovered = append(out.Discovered, version)
+
+			// Discovered: tags keep the tag name; branches/commits show short SHA.
+			discoveredLabel := eligibleLabel
+			if isPreferBranchRef(v) || providers.IsGitCommitHash(v) {
+				if foundCommit != "" {
+					discoveredLabel = shortGitSHA(foundCommit)
+				}
+			}
+			out.Discovered = append(out.Discovered, formatDiscoveredVersion(discoveredLabel, foundFirstSeen, now))
 
 			// If the user already has this exact ref pinned (same tag + same commit),
 			// it is not an install candidate; don't show it as eligible.
@@ -448,9 +513,9 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 
 			age := now.Sub(foundFirstSeen)
 			if minAge <= 0 || age >= minAge {
-				out.Eligible = append(out.Eligible, version)
+				out.Eligible = append(out.Eligible, eligibleLabel)
 			} else {
-				out.EligibleSoon = append(out.EligibleSoon, version)
+				out.EligibleSoon = append(out.EligibleSoon, eligibleLabel)
 			}
 		}
 		return out
@@ -471,11 +536,10 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 			version = dv.Version[:7]
 		}
 		// Always show what's been recorded, even if it's not newer than installed.
-		out.Discovered = append(out.Discovered, version)
+		out.Discovered = append(out.Discovered, formatDiscoveredVersion(version, dv.FirstSeen, now))
 
 		// Eligibility is only meaningful for versions newer than what's installed.
 		if shouldRecordDiscoveredVersion(installedVersion, dv.Version) {
-			// If Version is a git commit hash, we truncate to 7 characters
 			age := now.Sub(dv.FirstSeen)
 			if minAge <= 0 || age >= minAge {
 				out.Eligible = append(out.Eligible, version)

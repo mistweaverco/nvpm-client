@@ -256,33 +256,20 @@ func (p *CodebergProvider) installFromGit(sourceID, repo, version string) bool {
 	// Resolve version (tag/commit/branch)
 	resolvedVersion := version
 	if resolvedVersion == "" || resolvedVersion == "latest" {
-		// Try to get latest tag from the cloned repo
 		var err error
-		resolvedVersion, err = p.getLatestVersionFromRepo(repoPath)
-		if err != nil {
+		resolvedVersion, err = ResolveGitLatestRef(sourceID)
+		if err != nil || strings.TrimSpace(resolvedVersion) == "" {
 			Logger.Info(fmt.Sprintf("Codeberg Install: Could not determine latest version, using default branch: %v", err))
-			// Try to detect default branch
 			resolvedVersion = p.getDefaultBranch(repo, repoPath)
 		}
 	}
 
-	// Checkout specific version
-	code, err := codebergShellOut("git", []string{"checkout", resolvedVersion}, repoPath, nil)
-	if err != nil || code != 0 {
-		if IsGenericDefaultBranchAlias(resolvedVersion) {
-			defaultBranch := p.getDefaultBranch(repo, repoPath)
-			if defaultBranch != "" && defaultBranch != resolvedVersion {
-				code, err = codebergShellOut("git", []string{"checkout", defaultBranch}, repoPath, nil)
-				if err == nil && code == 0 {
-					resolvedVersion = defaultBranch
-				}
-			}
-		}
-	}
-	if err != nil || code != 0 {
-		Logger.Error(fmt.Sprintf("Codeberg Install: Error checking out version %s: %v", resolvedVersion, err))
+	checkedOut, checkoutErr := gitCheckoutRefWithBranchFallback(codebergShellOut, repoPath, resolvedVersion, p.getDefaultBranch(repo, repoPath))
+	if checkoutErr != nil {
+		Logger.Error(fmt.Sprintf("Codeberg Install: Error checking out version %s: %v", resolvedVersion, checkoutErr))
 		return false
 	}
+	resolvedVersion = checkedOut
 
 	// Add to local packages
 	if err := persistGitHostedPackage(sourceID, resolvedVersion, repoPath, repoURL); err != nil {
@@ -360,10 +347,9 @@ func (p *CodebergProvider) Update(sourceID string) bool {
 		return false
 	}
 
-	// Get latest version
-	latestVersion, err := p.getLatestVersionFromRepo(repoPath)
-	if err != nil {
-		// No tags found, use default branch
+	// Get latest version (prefer-branch-over-release policy)
+	latestVersion, err := ResolveGitLatestRef(sourceID)
+	if err != nil || strings.TrimSpace(latestVersion) == "" {
 		latestVersion = p.getDefaultBranch(repo, repoPath)
 	}
 
@@ -372,9 +358,7 @@ func (p *CodebergProvider) Update(sourceID string) bool {
 }
 
 func (p *CodebergProvider) getLatestVersion(repo string) (string, error) {
-	// This is called before cloning, so we can't use the repo path
-	// Just return default branch - actual version will be resolved after clone
-	return p.getDefaultBranch(repo, ""), nil
+	return ResolveGitLatestRef("codeberg:" + repo)
 }
 
 func (p *CodebergProvider) getLatestVersionFromRepo(repoPath string) (string, error) {

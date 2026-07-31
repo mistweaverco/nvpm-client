@@ -6,16 +6,18 @@ import (
 	"time"
 
 	"github.com/mistweaverco/nvpm-client/internal/config"
+	"github.com/mistweaverco/nvpm-client/internal/lib/providers"
 	"github.com/mistweaverco/nvpm-client/internal/lib/version"
 	"github.com/spf13/cobra"
 )
 
 var cfg = config.NewConfig(config.Config{
 	Flags: config.ConfigFlags{
-		CacheMaxAge:   24 * time.Hour,        // Default to 24 hours
-		MinReleaseAge: 7 * 24 * time.Hour,    // Default to 7 days (discovery-time based)
-		Color:         config.ColorModeAuto,  // Default to auto (respect TTY)
-		Output:        config.OutputModeRich, // Default to rich output
+		CacheMaxAge:             24 * time.Hour,                          // Default to 24 hours
+		MinReleaseAge:           7 * 24 * time.Hour,                      // Default to 7 days (discovery-time based)
+		PreferBranchOverRelease: config.DefaultPreferBranchOverRelease(), // Prefer branch when release is stale
+		Color:                   config.ColorModeAuto,                    // Default to auto (respect TTY)
+		Output:                  config.OutputModeRich,                   // Default to rich output
 	},
 })
 
@@ -63,6 +65,7 @@ func init() {
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		// Load optional config.yaml (next to nvpm-lock.json) and apply defaults
 		// only when the user didn't explicitly set flags.
+		cfg.Flags.PreferBranchOverRelease = config.DefaultPreferBranchOverRelease()
 		if fileCfg, ok, err := config.LoadFileConfig(); err == nil && ok {
 			if !cmd.Flags().Changed("cache-max-age") {
 				if d := fileCfg.RegistryCacheMaxAgeOrZero(); d > 0 {
@@ -74,6 +77,7 @@ func init() {
 					cfg.Flags.MinReleaseAge = d
 				}
 			}
+			cfg.Flags.PreferBranchOverRelease = fileCfg.PreferBranchOverReleaseOrDefault()
 			if !cmd.Flags().Changed("color") && fileCfg.UI.Color != "" {
 				_ = cfg.Flags.Color.Set(fileCfg.UI.Color) // ignore invalid values, keep defaults
 			}
@@ -81,6 +85,7 @@ func init() {
 				outputFlagValue = fileCfg.UI.Output
 			}
 		}
+		providers.SetPreferBranchPolicyFromConfig(cfg.Flags.PreferBranchOverRelease)
 
 		// Parse output mode from flag value
 		if outputFlagValue != "" {

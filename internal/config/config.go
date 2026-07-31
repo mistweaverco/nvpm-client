@@ -70,11 +70,12 @@ func (o *OutputMode) Type() string {
 }
 
 type ConfigFlags struct {
-	Version       bool
-	CacheMaxAge   time.Duration
-	MinReleaseAge time.Duration
-	Color         ColorMode
-	Output        OutputMode
+	Version                 bool
+	CacheMaxAge             time.Duration
+	MinReleaseAge           time.Duration
+	PreferBranchOverRelease PreferBranchOverRelease
+	Color                   ColorMode
+	Output                  OutputMode
 }
 
 type Config struct {

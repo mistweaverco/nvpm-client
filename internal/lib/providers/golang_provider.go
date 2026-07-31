@@ -203,7 +203,7 @@ func (p *GolangProvider) Sync() bool {
 		}
 	}
 	if !p.checkGoAvailable() {
-		Logger.Error("Golang Sync: Go is not available. Please install Go and ensure it's in your PATH.")
+		logAndSetError("Golang Sync: Go is not available. Please install Go and ensure it's in your PATH.")
 		return false
 	}
 	packagesFound := p.generatePackageJSON()
@@ -216,7 +216,8 @@ func (p *GolangProvider) Sync() bool {
 	if _, err := goStat(goModPath); os.IsNotExist(err) {
 		initCode, err := goShellOut("go", []string{"mod", "init", "nvpm-golang-packages"}, p.APP_PACKAGES_DIR, nil)
 		if err != nil || initCode != 0 {
-			Logger.Error(fmt.Sprintf("Error initializing Go module: %v", err))
+			msg := fmt.Sprintf("Error initializing Go module: %v", err)
+			logAndSetError(msg)
 			return false
 		}
 	}
@@ -232,15 +233,28 @@ func (p *GolangProvider) Sync() bool {
 			installed = true
 		}
 		if !installed {
-			Logger.Info(fmt.Sprintf("Golang Sync: Package %s@%s not installed, installing...", name, pkg.Version))
-			installCode, err := goShellOut("go", []string{"install", name + "@" + pkg.Version}, p.APP_PACKAGES_DIR, []string{"GOBIN=" + gobin})
+			pkgRef := name + "@" + pkg.Version
+			Logger.Info(fmt.Sprintf("Golang Sync: Package %s not installed, installing...", pkgRef))
+			Logger.Debug(fmt.Sprintf("Golang Sync: running: go install %s (GOBIN=%s, dir=%s)", pkgRef, gobin, p.APP_PACKAGES_DIR))
+			installCode, output, err := goShellOutCapture("go", []string{"install", pkgRef}, p.APP_PACKAGES_DIR, []string{"GOBIN=" + gobin})
 			if err != nil || installCode != 0 {
-				Logger.Error(fmt.Sprintf("Error installing %s@%s: %v", name, pkg.Version, err))
+				msg := strings.TrimSpace(output)
+				if msg == "" && err != nil {
+					msg = err.Error()
+				}
+				if msg == "" {
+					msg = fmt.Sprintf("exit code %d", installCode)
+				}
+				logAndSetError(fmt.Sprintf("go install %s failed: %s", pkgRef, msg))
 				allOk = false
 			} else {
+				if strings.TrimSpace(output) != "" {
+					Logger.Debug(fmt.Sprintf("Golang Sync: go install %s output: %s", pkgRef, strings.TrimSpace(output)))
+				}
 				installedCount++
 				if err := p.createSymlink(pkg.SourceID); err != nil {
-					Logger.Error(fmt.Sprintf("Error creating symlinks for %s: %v", name, err))
+					logAndSetError(fmt.Sprintf("Error creating symlinks for %s: %v", name, err))
+					allOk = false
 				}
 			}
 		} else {
@@ -253,15 +267,18 @@ func (p *GolangProvider) Sync() bool {
 }
 
 func (p *GolangProvider) Install(sourceID, version string) bool {
+	ClearLastError()
 	var err error
 	if version == "latest" {
 		version, err = p.getLatestVersion(p.getRepo(sourceID))
 		if err != nil {
-			Logger.Error("Error getting latest version for package %s: %v", sourceID, err)
+			logAndSetError(fmt.Sprintf("Error getting latest version for package %s: %v", sourceID, err))
 			return false
 		}
+		Logger.Debug(fmt.Sprintf("Golang Install: resolved latest version for %s -> %s", sourceID, version))
 	}
 	if err := lppGoAdd(sourceID, version); err != nil {
+		logAndSetError(fmt.Sprintf("Error adding %s@%s to lockfile: %v", sourceID, version, err))
 		return false
 	}
 	return p.Sync()
@@ -300,13 +317,20 @@ func (p *GolangProvider) Update(sourceID string) bool {
 }
 
 func (p *GolangProvider) getLatestVersion(packageName string) (string, error) {
-	_, output, err := goShellOutCapture("go", []string{"list", "-m", "-versions", packageName}, "", nil)
-	if err != nil {
-		return "", err
+	code, output, err := goShellOutCapture("go", []string{"list", "-m", "-versions", packageName}, "", nil)
+	out := strings.TrimSpace(output)
+	if err != nil || code != 0 {
+		if out != "" {
+			return "", fmt.Errorf("go list -m -versions %s failed: %s", packageName, out)
+		}
+		if err != nil {
+			return "", fmt.Errorf("go list -m -versions %s failed: %w", packageName, err)
+		}
+		return "", fmt.Errorf("go list -m -versions %s failed: exit code %d", packageName, code)
 	}
-	parts := strings.Fields(output)
+	parts := strings.Fields(out)
 	if len(parts) < 2 {
-		return "", fmt.Errorf("invalid output format from go list")
+		return "", fmt.Errorf("invalid output from go list -m -versions %s: %q", packageName, out)
 	}
 	return parts[len(parts)-1], nil
 }

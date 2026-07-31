@@ -366,10 +366,9 @@ func (p *GitHubProvider) Update(sourceID string) bool {
 		return false
 	}
 
-	// Get latest version
-	latestVersion, err := p.getLatestVersionFromRepo(repoPath)
-	if err != nil {
-		// No tags found, use default branch
+	// Get latest version (prefer-branch-over-release policy)
+	latestVersion, err := ResolveGitLatestRef(sourceID)
+	if err != nil || strings.TrimSpace(latestVersion) == "" {
 		latestVersion = p.getDefaultBranch(repo, repoPath)
 	}
 
@@ -378,12 +377,7 @@ func (p *GitHubProvider) Update(sourceID string) bool {
 }
 
 func (p *GitHubProvider) getLatestVersion(repo string) (string, error) {
-	// Prefer the latest GitHub release tag (works for binary release installs).
-	// If a repo doesn't publish releases, fall back to the default branch.
-	if tag, err := p.getLatestReleaseTag(repo); err == nil && strings.TrimSpace(tag) != "" {
-		return strings.TrimSpace(tag), nil
-	}
-	return p.getDefaultBranch(repo, ""), nil
+	return ResolveGitLatestRef("github:" + repo)
 }
 
 func (p *GitHubProvider) getLatestVersionFromRepo(repoPath string) (string, error) {

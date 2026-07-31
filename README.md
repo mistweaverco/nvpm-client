@@ -106,6 +106,28 @@ If `NVPM_CACHE` isn't set, NVPM uses OS defaults:
 
 It's advised to keep the `nvpm-lock.json` file in version control.
 
+### Debugging
+
+Set `NVPM_DEBUG` to increase log verbosity on stderr:
+
+| Value | Level |
+|-------|-------|
+| `debug`, `true`, `1`, `yes`, `on` | Most verbose (commands, paths, install details) |
+| `info` | High-level progress |
+| `warn` | Warnings |
+| unset / `error` / `0` / `false` | Errors only (default) |
+
+With `NVPM_DEBUG=debug` (or `info`), install/update spinners are disabled so log lines stay readable.
+Failed installs also print the underlying provider error under the failure line (e.g. `go install` stderr).
+
+Example:
+
+```sh
+NVPM_DEBUG=debug nvpm add golang:golang.org/x/tools/gopls
+```
+
+Optionally set `NVPM_LOG_FORMAT=json` for machine-readable logs.
+
 ### Modify environment path
 
 If you want the installed packages to be available in your path,
@@ -256,10 +278,25 @@ registry:
   min-release-age: 7d
   urls:
     - https://github.com/mistweaverco/nvpm-registry/releases/latest/download/nvpm-registry.json.zip
+git:
+  update-resolution:
+    prefers-branch-over-release:
+      branches:
+        - main
+        - master
+      when:
+        kind: release-age-gap
+        gap: 60d
 ui:
   color: auto
   output: rich
 ```
+
+`git.update-resolution.prefers-branch-over-release` controls when **non-registry**
+git-hosted packages use a branch tip instead of a stale tag/release as “latest”.
+Registry packages keep the curated registry version. The default (even without
+a config file) is `release-age-gap` with `gap: 60d` and branches `main`, `master`.
+Use `kind: always` to ignore tags/releases entirely for those non-registry packages.
 
 A JSON Schema is provided at `schemas/config.schema.json`.
 

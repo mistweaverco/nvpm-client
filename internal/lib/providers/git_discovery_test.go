@@ -2,7 +2,9 @@ package providers
 
 import (
 	"testing"
+	"time"
 
+	"github.com/mistweaverco/nvpm-client/internal/config"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -123,6 +125,11 @@ func TestIsGenericDefaultBranchAlias(t *testing.T) {
 func TestDiscoverGitRemoteLatestPrefersSemverTag(t *testing.T) {
 	old := gitDiscoveryShellOutCapture
 	defer func() { gitDiscoveryShellOutCapture = old }()
+	oldDate := fetchGitCommitDateFn
+	defer func() { fetchGitCommitDateFn = oldDate }()
+	fetchGitCommitDateFn = func(string, string) (time.Time, error) {
+		return time.Time{}, assert.AnError
+	}
 	gitDiscoveryShellOutCapture = func(_ string, args []string, _ string, _ []string) (int, string, error) {
 		if len(args) >= 2 && args[0] == "ls-remote" && args[1] == "--tags" {
 			return 0, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v1.0.0\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v2.0.0\n", nil
@@ -137,6 +144,78 @@ func TestDiscoverGitRemoteLatestPrefersSemverTag(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v2.0.0", ver)
 	assert.Equal(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", commit)
+}
+
+func TestDiscoverGitRemoteLatestPrefersBranchWhenTagStale(t *testing.T) {
+	old := gitDiscoveryShellOutCapture
+	defer func() { gitDiscoveryShellOutCapture = old }()
+	oldDate := fetchGitCommitDateFn
+	defer func() { fetchGitCommitDateFn = oldDate }()
+	oldPolicy := GetPreferBranchPolicy()
+	defer SetPreferBranchPolicy(oldPolicy)
+	SetPreferBranchPolicy(PreferBranchPolicy{
+		Branches: []string{"main", "master"},
+		Kind:     config.PreferBranchWhenReleaseAgeGap,
+		Gap:      60 * 24 * time.Hour,
+	})
+
+	now := time.Now()
+	fetchGitCommitDateFn = func(_ string, sha string) (time.Time, error) {
+		switch sha {
+		case "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":
+			return now.Add(-90 * 24 * time.Hour), nil
+		case "dddddddddddddddddddddddddddddddddddddddd":
+			return now.Add(-1 * 24 * time.Hour), nil
+		default:
+			return time.Time{}, assert.AnError
+		}
+	}
+	gitDiscoveryShellOutCapture = func(_ string, args []string, _ string, _ []string) (int, string, error) {
+		if len(args) >= 2 && args[0] == "ls-remote" && args[1] == "--tags" {
+			return 0, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v2.0.0\n", nil
+		}
+		if len(args) >= 3 && args[0] == "ls-remote" && args[2] == "refs/tags/v2.0.0^{}" {
+			return 0, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v2.0.0^{}\n", nil
+		}
+		if len(args) >= 3 && args[0] == "ls-remote" && args[2] == "refs/heads/main" {
+			return 0, "dddddddddddddddddddddddddddddddddddddddd\trefs/heads/main\n", nil
+		}
+		return 1, "", nil
+	}
+
+	ver, commit, err := DiscoverGitRemoteLatest("github:o/plugin", "main")
+	require.NoError(t, err)
+	assert.Equal(t, "main", ver)
+	assert.Equal(t, "dddddddddddddddddddddddddddddddddddddddd", commit)
+}
+
+func TestDiscoverGitRemoteLatestAlwaysPrefersBranch(t *testing.T) {
+	old := gitDiscoveryShellOutCapture
+	defer func() { gitDiscoveryShellOutCapture = old }()
+	oldPolicy := GetPreferBranchPolicy()
+	defer SetPreferBranchPolicy(oldPolicy)
+	SetPreferBranchPolicy(PreferBranchPolicy{
+		Branches: []string{"main"},
+		Kind:     config.PreferBranchWhenAlways,
+	})
+
+	gitDiscoveryShellOutCapture = func(_ string, args []string, _ string, _ []string) (int, string, error) {
+		if len(args) >= 2 && args[0] == "ls-remote" && args[1] == "--tags" {
+			return 0, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v2.0.0\n", nil
+		}
+		if len(args) >= 3 && args[0] == "ls-remote" && args[2] == "refs/tags/v2.0.0^{}" {
+			return 0, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v2.0.0^{}\n", nil
+		}
+		if len(args) >= 3 && args[0] == "ls-remote" && args[2] == "refs/heads/main" {
+			return 0, "dddddddddddddddddddddddddddddddddddddddd\trefs/heads/main\n", nil
+		}
+		return 1, "", nil
+	}
+
+	ver, commit, err := DiscoverGitRemoteLatest("github:o/plugin", "main")
+	require.NoError(t, err)
+	assert.Equal(t, "main", ver)
+	assert.Equal(t, "dddddddddddddddddddddddddddddddddddddddd", commit)
 }
 
 func TestDiscoverGitRemoteLatestFallsBackToBranch(t *testing.T) {

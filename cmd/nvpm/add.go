@@ -286,7 +286,7 @@ Examples:
 					} else {
 						failureCount++
 						failures = append(failures, displayID)
-						fmt.Printf("%s Failed to install %s@%s\n", IconClose(), displayID, resolvedVersion)
+						printInstallFailure(displayID, resolvedVersion)
 					}
 				}
 				continue // Skip the single package processing below
@@ -371,7 +371,7 @@ Examples:
 			} else {
 				failureCount++
 				failures = append(failures, displayID)
-				fmt.Printf("%s Failed to install %s@%s\n", IconClose(), displayID, resolvedVersion)
+				printInstallFailure(displayID, resolvedVersion)
 			}
 		}
 
@@ -431,6 +431,15 @@ func init() {
 	addCmd.Flags().StringVar(&installExternalTreeSitterQueries, "external-treesitter-queries", "ask", "when Neovim integration needs optional query-only git repos from the registry: ask (default), always, never (overridden by NVPM_EXTERNAL_TREESITTER_QUERIES when this flag is left at default)")
 	addCmd.Flags().BoolVar(&installForce, "force", false, "bypass min-release-age safety checks")
 	addCmd.Flags().StringVar(&installPluginEditor, "plugin", "", "install as an editor plugin (under plugins/ instead of packages/); supported: neovim")
+}
+
+func printInstallFailure(displayID, resolvedVersion string) {
+	fmt.Printf("%s Failed to install %s@%s\n", IconClose(), displayID, resolvedVersion)
+	if detail := strings.TrimSpace(providers.TakeLastError()); detail != "" {
+		fmt.Printf("  %s\n", detail)
+	} else {
+		fmt.Printf("  (re-run with NVPM_DEBUG=debug for provider logs)\n")
+	}
 }
 
 // indirections for testability

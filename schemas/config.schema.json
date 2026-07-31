@@ -41,6 +41,52 @@
         }
       }
     },
+    "git": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Git-hosted package update resolution settings.",
+      "properties": {
+        "update-resolution": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prefers-branch-over-release": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "When to prefer a branch tip over tags/releases as the latest version for git-hosted packages.",
+              "properties": {
+                "branches": {
+                  "type": "array",
+                  "description": "Preferred branch names, in order. If multiple exist, the tip with the newer upstream commit date wins.",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "when": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind"],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "description": "always: never use tags/releases. release-age-gap: use branch when the latest tag/release is at least gap old and the branch tip is newer.",
+                      "enum": ["always", "release-age-gap"]
+                    },
+                    "gap": {
+                      "type": "string",
+                      "description": "Minimum upstream age of the latest tag/release before preferring the branch tip. Required for release-age-gap. Go duration string (e.g. 60d, 1440h).",
+                      "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h|d)$|^0$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "ui": {
       "type": "object",
       "additionalProperties": false,
@@ -59,4 +105,3 @@
     }
   }
 }
-

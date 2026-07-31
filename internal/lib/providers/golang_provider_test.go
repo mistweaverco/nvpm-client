@@ -199,18 +199,25 @@ func TestGolangSync_InstallErrorSetsAllOkFalse(t *testing.T) {
 	assert.NoError(t, os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "go.mod"), []byte("module nvpm"), 0644))
 	// add desired package
 	_ = lppGoAdd("pkg:golang/github.com/acme/tool", "v1.0.0")
-	// stub goShellOut: go available ok, install fails
+	// stub: go available ok, install fails (install now uses ShellOutCapture)
 	oldOut := goShellOut
+	oldCap := goShellOutCapture
 	goShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
 		if len(args) == 1 && args[0] == "version" {
 			return 0, nil
 		}
-		if len(args) >= 1 && args[0] == "install" {
-			return 1, errors.New("install")
-		}
 		return 0, nil
 	}
-	defer func() { goShellOut = oldOut }()
+	goShellOutCapture = func(cmd string, args []string, dir string, env []string) (int, string, error) {
+		if len(args) >= 1 && args[0] == "install" {
+			return 1, "go: module github.com/acme/tool: not found", errors.New("install")
+		}
+		return 0, "", nil
+	}
+	defer func() {
+		goShellOut = oldOut
+		goShellOutCapture = oldCap
+	}()
 
 	assert.False(t, p.Sync())
 }
@@ -278,16 +285,27 @@ func TestMoreBranchesGolang(t *testing.T) {
 	gm := filepath.Join(p.APP_PACKAGES_DIR, "go.mod")
 	_ = os.Remove(gm)
 	oldOut := goShellOut
+	oldCap = goShellOutCapture
 	goShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
 		if len(args) >= 2 && args[0] == "mod" && args[1] == "init" {
 			return 0, nil
 		}
-		return 1, errors.New("install")
+		if len(args) == 1 && args[0] == "version" {
+			return 0, nil
+		}
+		return 0, nil
+	}
+	goShellOutCapture = func(cmd string, args []string, dir string, env []string) (int, string, error) {
+		if len(args) >= 1 && args[0] == "install" {
+			return 1, "install failed", errors.New("install")
+		}
+		return 0, "", nil
 	}
 	// Add desired package
 	_ = local_packages_parser.AddLocalPackage("pkg:golang/github.com/a/b", "1.0.0")
 	assert.False(t, p.Sync())
 	goShellOut = oldOut
+	goShellOutCapture = oldCap
 }
 
 func TestGolangSyncInstallSuccess(t *testing.T) {
@@ -308,11 +326,14 @@ func TestGolangSyncInstallSuccess(t *testing.T) {
 	gobin := filepath.Join(p.APP_PACKAGES_DIR, "bin")
 	_ = os.MkdirAll(gobin, 0755)
 	_ = os.WriteFile(filepath.Join(gobin, "y"), []byte(""), 0755)
-	// go commands succeed
+	// go commands succeed (install uses ShellOutCapture)
 	oldOut := goShellOut
+	oldCap := goShellOutCapture
 	goShellOut = func(cmd string, args []string, dir string, env []string) (int, error) { return 0, nil }
+	goShellOutCapture = func(cmd string, args []string, dir string, env []string) (int, string, error) { return 0, "", nil }
 	assert.True(t, p.Sync())
 	goShellOut = oldOut
+	goShellOutCapture = oldCap
 }
 
 func TestGolangMorePermutations(t *testing.T) {
@@ -330,18 +351,23 @@ func TestGolangMorePermutations(t *testing.T) {
 	gobin := filepath.Join(p.APP_PACKAGES_DIR, "bin")
 	_ = os.MkdirAll(gobin, 0755)
 	_ = os.WriteFile(filepath.Join(gobin, "skip"), []byte(""), 0755)
+	// y remains in local packages from generatePackageJSON; mark it installed too
+	_ = os.WriteFile(filepath.Join(gobin, "y"), []byte(""), 0755)
 	writeRegistry(t, []registry_parser.RegistryItem{{
 		Name: "skip", Version: "v1.0.0", Source: registry_parser.RegistryItemSource{ID: "pkg:golang/github.com/x/skip"},
 		Bin: map[string]string{"skip": "skip"},
 	}})
 	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
 	oldGo := goShellOut
+	oldCap := goShellOutCapture
 	goShellOut = func(string, []string, string, []string) (int, error) { return 0, nil }
+	goShellOutCapture = func(string, []string, string, []string) (int, string, error) { return 0, "", nil }
 	assert.True(t, p.Sync())
 	goShellOut = oldGo
+	goShellOutCapture = oldCap
 
 	// getLatestVersion invalid output
-	oldCap := goShellOutCapture
+	oldCap = goShellOutCapture
 	goShellOutCapture = func(string, []string, string, []string) (int, string, error) { return 0, "onlyone", nil }
 	_, err := p.getLatestVersion("mod")
 	assert.Error(t, err)

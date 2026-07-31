@@ -136,8 +136,11 @@ func TestNonRegistryDiscoveryOnRefresh(t *testing.T) {
 	providers.SetDiscoveryWritesEnabled(true)
 	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
 
-	oldFn := providers.SetDiscoverGitRemoteLatestForTest(func(sourceID, installedVersion string) (string, string, error) {
-		return "v3.0.0", "ffffffffffffffffffffffffffffffffffffffff", nil
+	oldFn := providers.SetDiscoverGitRemoteLatestForTest(func(sourceID, installedVersion string) (providers.GitRemoteLatestResult, error) {
+		return providers.GitRemoteLatestResult{
+			Version: "v3.0.0",
+			Commit:  "ffffffffffffffffffffffffffffffffffffffff",
+		}, nil
 	})
 	t.Cleanup(oldFn)
 
@@ -192,9 +195,12 @@ func TestNonRegistryDiscoverySkippedWhenWarm(t *testing.T) {
 	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
 
 	called := false
-	oldFn := providers.SetDiscoverGitRemoteLatestForTest(func(sourceID, installedVersion string) (string, string, error) {
+	oldFn := providers.SetDiscoverGitRemoteLatestForTest(func(sourceID, installedVersion string) (providers.GitRemoteLatestResult, error) {
 		called = true
-		return "v3.0.0", "ffffffffffffffffffffffffffffffffffffffff", nil
+		return providers.GitRemoteLatestResult{
+			Version: "v3.0.0",
+			Commit:  "ffffffffffffffffffffffffffffffffffffffff",
+		}, nil
 	})
 	t.Cleanup(oldFn)
 
@@ -262,4 +268,112 @@ func TestCheckUpdateAvailabilityUsesRemoteLatestCommit(t *testing.T) {
 	)
 	assert.False(t, hasUpdate)
 	assert.Contains(t, info, "Up to date")
+}
+
+func TestDiscoveryDisplayPreferBranchSupersededTag(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NVPM_HOME", home)
+	_ = files.GetAppDataPath()
+
+	providers.SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
+
+	now := time.Now()
+	tagUnix := now.Add(-290 * 24 * time.Hour).Unix()
+	require.NoError(t, providers.SetRemoteLatest("github:o/manual", providers.RemoteLatestEntry{
+		Version:          "main",
+		Commit:           "dddddddddddddddddddddddddddddddddddddddd",
+		SupersededTag:    "v1.2.3",
+		SupersededCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		SupersededUnix:   tagUnix,
+	}))
+	require.NoError(t, providers.RecordDiscoveryBatch([]providers.DiscoveryPair{{
+		SourceID: "github:o/manual",
+		Version:  "main",
+		Commit:   "dddddddddddddddddddddddddddddddddddddddd",
+	}}))
+
+	// Backdate first-seen to 2 days ago.
+	dbPath := filepath.Join(files.GetAppDataPath(), "discovery.json")
+	b, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(b, &raw))
+	firstSeen, ok := raw["first_seen_unix"].(map[string]any)
+	require.True(t, ok)
+	key := "github:o/manual@main+dddddddddddddddddddddddddddddddddddddddd"
+	firstSeen[key] = float64(now.Add(-2 * 24 * time.Hour).Unix())
+	out, err := json.MarshalIndent(raw, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(dbPath, out, 0644))
+
+	svc := NewListServiceWithDependencies(
+		&MockLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(string) (string, string) { return "", "" },
+		},
+		&MockUpdateChecker{},
+		&MockFileDownloader{},
+	)
+
+	disc := svc.discoveryDisplayForInstalled(
+		"github:o/manual",
+		"main",
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	)
+	require.Len(t, disc.Available, 1)
+	assert.Equal(t, "main (ddddddd) (2 days ago)", disc.Available[0])
+	require.Len(t, disc.Discovered, 1)
+	assert.Equal(t, "ddddddd (2 days ago; v1.2.3 290 days ago)", disc.Discovered[0])
+	require.Len(t, disc.Eligible, 1)
+	assert.Equal(t, "main (ddddddd)", disc.Eligible[0])
+}
+
+func TestDiscoveryDisplayPreferBranchEligibleSoon(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NVPM_HOME", home)
+	_ = files.GetAppDataPath()
+
+	providers.SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
+
+	cfg.Flags.MinReleaseAge = 7 * 24 * time.Hour
+	t.Cleanup(func() { cfg.Flags.MinReleaseAge = 0 })
+
+	now := time.Now()
+	tagUnix := now.Add(-120 * 24 * time.Hour).Unix()
+	require.NoError(t, providers.SetRemoteLatest("github:o/manual", providers.RemoteLatestEntry{
+		Version:          "main",
+		Commit:           "322c79dfffffffffffffffffffffffffffffff",
+		SupersededTag:    "v1.2.3",
+		SupersededCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		SupersededUnix:   tagUnix,
+	}))
+	require.NoError(t, providers.RecordDiscoveryBatch([]providers.DiscoveryPair{{
+		SourceID: "github:o/manual",
+		Version:  "main",
+		Commit:   "322c79dfffffffffffffffffffffffffffffff",
+	}}))
+
+	svc := NewListServiceWithDependencies(
+		&MockLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(string) (string, string) { return "", "" },
+		},
+		&MockUpdateChecker{},
+		&MockFileDownloader{},
+	)
+
+	disc := svc.discoveryDisplayForInstalled(
+		"github:o/manual",
+		"main",
+		"322c79cfffffffffffffffffffffffffffffff",
+	)
+	require.Len(t, disc.Available, 1)
+	assert.Equal(t, "main (322c79d) (0 days ago)", disc.Available[0])
+	require.Len(t, disc.Discovered, 1)
+	assert.Equal(t, "322c79d (0 days ago; v1.2.3 120 days ago)", disc.Discovered[0])
+	assert.Empty(t, disc.Eligible)
+	require.Len(t, disc.EligibleSoon, 1)
+	assert.Equal(t, "main (322c79d in 7 days)", disc.EligibleSoon[0])
 }

@@ -140,10 +140,11 @@ func TestDiscoverGitRemoteLatestPrefersSemverTag(t *testing.T) {
 		return 1, "", nil
 	}
 
-	ver, commit, err := DiscoverGitRemoteLatest("github:o/plugin", "main")
+	result, err := DiscoverGitRemoteLatest("github:o/plugin", "main")
 	require.NoError(t, err)
-	assert.Equal(t, "v2.0.0", ver)
-	assert.Equal(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", commit)
+	assert.Equal(t, "v2.0.0", result.Version)
+	assert.Equal(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", result.Commit)
+	assert.Empty(t, result.SupersededTag)
 }
 
 func TestDiscoverGitRemoteLatestPrefersBranchWhenTagStale(t *testing.T) {
@@ -183,10 +184,13 @@ func TestDiscoverGitRemoteLatestPrefersBranchWhenTagStale(t *testing.T) {
 		return 1, "", nil
 	}
 
-	ver, commit, err := DiscoverGitRemoteLatest("github:o/plugin", "main")
+	result, err := DiscoverGitRemoteLatest("github:o/plugin", "main")
 	require.NoError(t, err)
-	assert.Equal(t, "main", ver)
-	assert.Equal(t, "dddddddddddddddddddddddddddddddddddddddd", commit)
+	assert.Equal(t, "main", result.Version)
+	assert.Equal(t, "dddddddddddddddddddddddddddddddddddddddd", result.Commit)
+	assert.Equal(t, "v2.0.0", result.SupersededTag)
+	assert.Equal(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", result.SupersededCommit)
+	assert.Equal(t, now.Add(-90*24*time.Hour).Unix(), result.SupersededTimeUnix)
 }
 
 func TestDiscoverGitRemoteLatestAlwaysPrefersBranch(t *testing.T) {
@@ -212,10 +216,11 @@ func TestDiscoverGitRemoteLatestAlwaysPrefersBranch(t *testing.T) {
 		return 1, "", nil
 	}
 
-	ver, commit, err := DiscoverGitRemoteLatest("github:o/plugin", "main")
+	result, err := DiscoverGitRemoteLatest("github:o/plugin", "main")
 	require.NoError(t, err)
-	assert.Equal(t, "main", ver)
-	assert.Equal(t, "dddddddddddddddddddddddddddddddddddddddd", commit)
+	assert.Equal(t, "main", result.Version)
+	assert.Equal(t, "dddddddddddddddddddddddddddddddddddddddd", result.Commit)
+	assert.Empty(t, result.SupersededTag)
 }
 
 func TestDiscoverGitRemoteLatestFallsBackToBranch(t *testing.T) {
@@ -234,10 +239,10 @@ func TestDiscoverGitRemoteLatestFallsBackToBranch(t *testing.T) {
 		return 1, "", nil
 	}
 
-	ver, commit, err := DiscoverGitRemoteLatest("github:o/plugin", "latest")
+	result, err := DiscoverGitRemoteLatest("github:o/plugin", "latest")
 	require.NoError(t, err)
-	assert.Equal(t, "main", ver)
-	assert.Equal(t, "dddddddddddddddddddddddddddddddddddddddd", commit)
+	assert.Equal(t, "main", result.Version)
+	assert.Equal(t, "dddddddddddddddddddddddddddddddddddddddd", result.Commit)
 }
 
 func TestDiscoverNonRegistryGitPackagesFiltersAndRecords(t *testing.T) {
@@ -247,9 +252,12 @@ func TestDiscoverNonRegistryGitPackagesFiltersAndRecords(t *testing.T) {
 
 	oldFn := discoverGitRemoteLatestFn
 	defer func() { discoverGitRemoteLatestFn = oldFn }()
-	discoverGitRemoteLatestFn = func(sourceID, installedVersion string) (string, string, error) {
+	discoverGitRemoteLatestFn = func(sourceID, installedVersion string) (GitRemoteLatestResult, error) {
 		assert.Equal(t, "github:o/manual", sourceID)
-		return "v9.9.9", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", nil
+		return GitRemoteLatestResult{
+			Version: "v9.9.9",
+			Commit:  "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+		}, nil
 	}
 
 	pkgs := []local_packages_parser.LocalPackageItem{

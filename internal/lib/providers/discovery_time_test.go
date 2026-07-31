@@ -59,15 +59,22 @@ func TestRemoteLatestGetSet(t *testing.T) {
 	assert.False(t, ok)
 
 	require.NoError(t, SetRemoteLatest("github:o/plugin", RemoteLatestEntry{
-		Version: "v2.0.0",
-		Commit:  "cccccccccccccccccccccccccccccccccccccccc",
+		Version:          "main",
+		Commit:           "cccccccccccccccccccccccccccccccccccccccc",
+		SupersededTag:    "v1.2.3",
+		SupersededCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		SupersededUnix:   1700000000,
 	}))
 
 	entry, ok, err := GetRemoteLatest("github:o/plugin")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "v2.0.0", entry.Version)
+	assert.Equal(t, "main", entry.Version)
 	assert.Equal(t, "cccccccccccccccccccccccccccccccccccccccc", entry.Commit)
+	assert.Equal(t, "v1.2.3", entry.SupersededTag)
+	assert.Equal(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", entry.SupersededCommit)
+	assert.Equal(t, int64(1700000000), entry.SupersededUnix)
+	assert.True(t, entry.HasSupersededTag())
 	assert.Greater(t, entry.CheckedUnix, int64(0))
 }
 

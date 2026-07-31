@@ -364,6 +364,21 @@ func formatDaysAgo(age time.Duration) string {
 	return fmt.Sprintf("%d days ago", days)
 }
 
+func formatInDays(remaining time.Duration) string {
+	if remaining < 0 {
+		remaining = 0
+	}
+	// Round up so "almost eligible" still shows at least 1 day remaining.
+	days := int((remaining + 24*time.Hour - 1) / (24 * time.Hour))
+	if days < 1 {
+		days = 1
+	}
+	if days == 1 {
+		return "1 day"
+	}
+	return fmt.Sprintf("%d days", days)
+}
+
 // formatDiscoveredVersion formats a discovered version for display with local first-seen age.
 func formatDiscoveredVersion(display string, firstSeen, now time.Time) string {
 	display = strings.TrimSpace(display)
@@ -374,6 +389,60 @@ func formatDiscoveredVersion(display string, firstSeen, now time.Time) string {
 		return display
 	}
 	return fmt.Sprintf("%s (%s)", display, formatDaysAgo(now.Sub(firstSeen)))
+}
+
+// formatGitRefWithCommitAge formats "main (322c79d) (0 days ago)" for Installed/Available.
+func formatGitRefWithCommitAge(ref, commit string, firstSeen, now time.Time) string {
+	ref = strings.TrimSpace(ref)
+	sha := shortGitSHA(commit)
+	var label string
+	switch {
+	case ref != "" && sha != "":
+		label = fmt.Sprintf("%s (%s)", ref, sha)
+	case sha != "":
+		label = sha
+	default:
+		label = ref
+	}
+	return formatDiscoveredVersion(label, firstSeen, now)
+}
+
+// formatPreferBranchDiscovered formats Discovered when a stale tag was superseded by a branch tip.
+// Example: "322c79d (0 days ago; v1.2.3 120 days ago)"
+func formatPreferBranchDiscovered(shortSHA string, firstSeen, now time.Time, tag string, tagAge time.Duration) string {
+	shortSHA = strings.TrimSpace(shortSHA)
+	tag = strings.TrimSpace(tag)
+	base := formatDiscoveredVersion(shortSHA, firstSeen, now)
+	if tag == "" {
+		return base
+	}
+	tagNote := fmt.Sprintf("%s %s", tag, formatDaysAgo(tagAge))
+	if firstSeen.IsZero() || !strings.HasSuffix(base, ")") {
+		return fmt.Sprintf("%s (%s)", shortSHA, tagNote)
+	}
+	return strings.TrimSuffix(base, ")") + "; " + tagNote + ")"
+}
+
+// formatEligibleGitRef formats Eligible / EligibleSoon for git refs.
+// Eligible: "main (322c79d)"; soon: "main (322c79d in 7 days)".
+func formatEligibleGitRef(ref, commit string, remaining time.Duration) string {
+	ref = strings.TrimSpace(ref)
+	sha := shortGitSHA(commit)
+	if ref == "" {
+		ref = sha
+		sha = ""
+	}
+	if remaining > 0 {
+		in := formatInDays(remaining)
+		if sha != "" {
+			return fmt.Sprintf("%s (%s in %s)", ref, sha, in)
+		}
+		return fmt.Sprintf("%s (in %s)", ref, in)
+	}
+	if sha != "" {
+		return fmt.Sprintf("%s (%s)", ref, sha)
+	}
+	return ref
 }
 
 func shortGitSHA(commit string) string {
@@ -409,13 +478,40 @@ func commitMatchesRef(fullCommit, avail string) bool {
 	return fullCommit == avail || strings.HasPrefix(fullCommit, avail)
 }
 
+// formatInstalledGitDisplay formats the Installed column for git-hosted packages.
+// Example: "main (322c79c) (1 day ago)"
+func formatInstalledGitDisplay(sourceID, version, commit string, now time.Time) string {
+	version = strings.TrimSpace(version)
+	commit = strings.TrimSpace(commit)
+	if version == "" {
+		return "-"
+	}
+	var firstSeen time.Time
+	if commit != "" {
+		key := providers.FormatGitDiscoveryVersionForRef(version, commit)
+		if t, ok, err := providers.GetFirstSeen(sourceID, key); err == nil && ok {
+			firstSeen = t
+		}
+	}
+	if commit != "" && (isPreferBranchRef(version) || providers.IsGitCommitHash(version) || providers.IsGitHostedSourceID(sourceID)) {
+		return formatGitRefWithCommitAge(version, commit, firstSeen, now)
+	}
+	return formatDiscoveredVersion(version, firstSeen, now)
+}
+
 func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, installedCommit string) discoveryDisplay {
 	stable, prerelease := ls.registry.GetLatestVersions(sourceID)
+	var remoteLatest providers.RemoteLatestEntry
+	var hasRemoteLatest bool
 	if stable == "" && prerelease == "" {
 		if entry, ok, err := providers.GetRemoteLatest(sourceID); err == nil && ok {
 			stable = entry.Version
+			remoteLatest = entry
+			hasRemoteLatest = true
 		}
 	}
+
+	// Non-git / preliminary available labels (git path may enrich these below).
 	avail := make([]string, 0, 2)
 	if v := strings.TrimSpace(stable); v != "" && v != "latest" {
 		if providers.IsGitCommitHash(v) {
@@ -437,24 +533,34 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 	// filter/match by semver against the raw discovered keys. Instead, resolve each available tag
 	// to its discovery key and then check first-seen directly.
 	if providers.IsGitHostedSourceID(sourceID) {
-		out := discoveryDisplay{Available: avail}
 		now := time.Now()
 		minAge := cfg.Flags.MinReleaseAge
 		installedVersion = strings.TrimSpace(installedVersion)
 		installedCommit = strings.TrimSpace(installedCommit)
+
+		matchRefs := make([]string, 0, 2)
+		if v := strings.TrimSpace(stable); v != "" && v != "latest" {
+			matchRefs = append(matchRefs, v)
+		}
+		if v := strings.TrimSpace(prerelease); v != "" && v != "latest" && v != stable {
+			matchRefs = append(matchRefs, v)
+		}
+
+		out := discoveryDisplay{}
 
 		// IMPORTANT: listing must not trigger network work. For git providers, do NOT
 		// resolve tags to commits here. Instead, derive discovery state purely from
 		// what's already recorded in discovery.json (tag+commit / commit).
 		refs, err := ls.gitDiscoveredRefsFromDB(sourceID)
 		if err != nil {
+			out.Available = avail
 			return out
 		}
 
 		// For each available ref (tag or commit), see if we have any discovery entry for it.
 		// - For tags: any recorded "tag+<commit>" counts as discovered; we use the newest firstSeen.
 		// - For commit-only refs: a recorded "<commit>" counts as discovered.
-		for _, v := range avail {
+		for _, v := range matchRefs {
 			v = strings.TrimSpace(v)
 			if v == "" || v == "latest" {
 				continue
@@ -486,24 +592,55 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 					}
 				}
 			}
+
+			// Prefer remote_latest commit when this is the cached latest ref.
+			displayCommit := foundCommit
+			if hasRemoteLatest && strings.EqualFold(strings.TrimSpace(remoteLatest.Version), v) && strings.TrimSpace(remoteLatest.Commit) != "" {
+				displayCommit = remoteLatest.Commit
+				if !found {
+					// Still show Available from remote_latest even before first-seen is recorded.
+					foundFirstSeen = time.Time{}
+				}
+			}
+
+			// Available: "main (322c79d) (0 days ago)" for branch tips with a commit;
+			// otherwise keep the bare ref/tag label.
+			availLabel := v
+			if providers.IsGitCommitHash(availLabel) {
+				availLabel = availLabel[:7]
+			}
+			if displayCommit != "" && (isPreferBranchRef(v) || providers.IsGitCommitHash(v)) {
+				availLabel = formatGitRefWithCommitAge(v, displayCommit, foundFirstSeen, now)
+			} else if found && !foundFirstSeen.IsZero() {
+				availLabel = formatDiscoveredVersion(availLabel, foundFirstSeen, now)
+			}
+			out.Available = append(out.Available, availLabel)
+
 			if !found {
 				continue
 			}
 
-			// Eligible / Available-style bare label (tag, branch name, or short SHA).
-			eligibleLabel := v
-			if providers.IsGitCommitHash(eligibleLabel) {
-				eligibleLabel = eligibleLabel[:7]
-			}
-
 			// Discovered: tags keep the tag name; branches/commits show short SHA.
-			discoveredLabel := eligibleLabel
+			// When prefer-branch superseded a stale tag: "322c79d (0 days ago; v1.2.3 120 days ago)".
+			discoveredLabel := v
+			if providers.IsGitCommitHash(discoveredLabel) {
+				discoveredLabel = discoveredLabel[:7]
+			}
 			if isPreferBranchRef(v) || providers.IsGitCommitHash(v) {
 				if foundCommit != "" {
 					discoveredLabel = shortGitSHA(foundCommit)
 				}
 			}
-			out.Discovered = append(out.Discovered, formatDiscoveredVersion(discoveredLabel, foundFirstSeen, now))
+			if hasRemoteLatest && remoteLatest.HasSupersededTag() && isPreferBranchRef(v) {
+				tagAge := time.Duration(0)
+				if remoteLatest.SupersededUnix > 0 {
+					tagAge = now.Sub(time.Unix(remoteLatest.SupersededUnix, 0))
+				}
+				discoveredLabel = formatPreferBranchDiscovered(discoveredLabel, foundFirstSeen, now, remoteLatest.SupersededTag, tagAge)
+			} else {
+				discoveredLabel = formatDiscoveredVersion(discoveredLabel, foundFirstSeen, now)
+			}
+			out.Discovered = append(out.Discovered, discoveredLabel)
 
 			// If the user already has this exact ref pinned (same tag + same commit),
 			// it is not an install candidate; don't show it as eligible.
@@ -512,11 +649,16 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 			}
 
 			age := now.Sub(foundFirstSeen)
+			eligibleLabel := formatEligibleGitRef(v, foundCommit, 0)
 			if minAge <= 0 || age >= minAge {
 				out.Eligible = append(out.Eligible, eligibleLabel)
 			} else {
-				out.EligibleSoon = append(out.EligibleSoon, eligibleLabel)
+				out.EligibleSoon = append(out.EligibleSoon, formatEligibleGitRef(v, foundCommit, minAge-age))
 			}
+		}
+
+		if len(out.Available) == 0 {
+			out.Available = avail
 		}
 		return out
 	}
@@ -777,11 +919,11 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 	}
 
 	// Display packages grouped by provider and count updates
-	providers := []string{"npm", "golang", "pypi", "cargo", "github", "gitlab", "codeberg", "gem", "composer", "luarocks", "nuget", "opam", "openvsx", "generic"}
+	providerOrder := []string{"npm", "golang", "pypi", "cargo", "github", "gitlab", "codeberg", "gem", "composer", "luarocks", "nuget", "opam", "openvsx", "generic"}
 	updateCount := 0
 	totalCount := 0
 
-	for _, provider := range providers {
+	for _, provider := range providerOrder {
 		if packages, exists := packagesByProvider[provider]; exists {
 			markdown.WriteString(fmt.Sprintf("## %s Packages\n\n", strings.ToUpper(provider)))
 			markdown.WriteString("| Package ID | Installed | Available | Discovered | Eligible |\n")
@@ -808,7 +950,7 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 				disc := ls.discoveryDisplayForInstalled(pkg.SourceID, pkg.Version, pkg.Commit)
 				eligibleText := joinVersionsOrDash(disc.Eligible)
 				if eligibleText == "-" && len(disc.EligibleSoon) > 0 {
-					eligibleText = fmt.Sprintf("%s (not yet)", strings.Join(disc.EligibleSoon, ", "))
+					eligibleText = strings.Join(disc.EligibleSoon, ", ")
 				}
 				discoveredText := joinVersionsOrDash(disc.Discovered)
 				if discoveredText == "-" && cfg.Flags.MinReleaseAge > 0 && (len(disc.Available) > 0) {
@@ -820,9 +962,14 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 					_ = statusText
 				}
 
+				installedText := pkg.Version
+				if providers.IsGitHostedSourceID(pkg.SourceID) {
+					installedText = formatInstalledGitDisplay(pkg.SourceID, pkg.Version, pkg.Commit, time.Now())
+				}
+
 				markdown.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s |\n",
 					pkg.SourceID,
-					pkg.Version,
+					installedText,
 					availableText,
 					discoveredText,
 					eligibleText,
@@ -882,16 +1029,20 @@ func (ls *ListService) listInstalledPackagesPlain(filteredPackages []local_packa
 		packagesByProvider[provider] = append(packagesByProvider[provider], pkg)
 	}
 
-	providers := []string{"npm", "golang", "pypi", "cargo", "github", "gitlab", "codeberg", "gem", "composer", "luarocks", "nuget", "opam", "openvsx", "generic"}
+	providerOrder := []string{"npm", "golang", "pypi", "cargo", "github", "gitlab", "codeberg", "gem", "composer", "luarocks", "nuget", "opam", "openvsx", "generic"}
 	updateCount := 0
 	totalCount := 0
 
-	for _, provider := range providers {
+	for _, provider := range providerOrder {
 		if packages, exists := packagesByProvider[provider]; exists {
 			fmt.Printf("%s %s Packages:\n", IconDiamond(), strings.ToUpper(provider))
 			for _, pkg := range packages {
 				updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version, pkg.Commit)
-				fmt.Printf("   %s %s (v%s) %s\n", getProviderIcon(provider), pkg.SourceID, pkg.Version, updateInfo)
+				installedText := "v" + pkg.Version
+				if providers.IsGitHostedSourceID(pkg.SourceID) {
+					installedText = formatInstalledGitDisplay(pkg.SourceID, pkg.Version, pkg.Commit, time.Now())
+				}
+				fmt.Printf("   %s %s (%s) %s\n", getProviderIcon(provider), pkg.SourceID, installedText, updateInfo)
 				disc := ls.discoveryDisplayForInstalled(pkg.SourceID, pkg.Version, pkg.Commit)
 				if cfg.Flags.MinReleaseAge > 0 {
 					fmt.Printf("      available:  %s\n", joinVersionsOrDash(disc.Available))
@@ -899,7 +1050,7 @@ func (ls *ListService) listInstalledPackagesPlain(filteredPackages []local_packa
 					if len(disc.Eligible) > 0 {
 						fmt.Printf("      eligible:   %s\n", strings.Join(disc.Eligible, ", "))
 					} else if len(disc.EligibleSoon) > 0 {
-						fmt.Printf("      eligible:   - (not yet: %s)\n", strings.Join(disc.EligibleSoon, ", "))
+						fmt.Printf("      eligible:   %s\n", strings.Join(disc.EligibleSoon, ", "))
 					} else {
 						fmt.Printf("      eligible:   -\n")
 					}
@@ -957,6 +1108,15 @@ func (ls *ListService) listInstalledPackagesJSON(filteredPackages []local_packag
 			"available_versions":  disc.Available,
 			"discovered_versions": disc.Discovered,
 			"eligible_versions":   disc.Eligible,
+		}
+		if providers.IsGitHostedSourceID(pkg.SourceID) {
+			pkgData["installed_display"] = formatInstalledGitDisplay(pkg.SourceID, pkg.Version, pkg.Commit, time.Now())
+			if c := strings.TrimSpace(pkg.Commit); c != "" {
+				pkgData["commit"] = c
+			}
+		}
+		if len(disc.EligibleSoon) > 0 {
+			pkgData["eligible_soon_versions"] = disc.EligibleSoon
 		}
 		packagesData = append(packagesData, pkgData)
 

@@ -280,12 +280,33 @@ func gitRevParseHEAD(dir string) (string, error) {
 	return defaultExternalQueriesGitRevParse(dir)
 }
 
+// GitRemoteLatestResult is the outcome of DiscoverGitRemoteLatest.
+type GitRemoteLatestResult struct {
+	Version string
+	Commit  string
+	// SupersededTag is set when prefer-branch chose a branch over a stale tag.
+	SupersededTag      string
+	SupersededCommit   string
+	SupersededTimeUnix int64
+}
+
+func (r GitRemoteLatestResult) toRemoteLatestEntry(checked time.Time) RemoteLatestEntry {
+	return RemoteLatestEntry{
+		Version:          strings.TrimSpace(r.Version),
+		Commit:           strings.TrimSpace(r.Commit),
+		CheckedUnix:      checked.Unix(),
+		SupersededTag:    strings.TrimSpace(r.SupersededTag),
+		SupersededCommit: strings.TrimSpace(r.SupersededCommit),
+		SupersededUnix:   r.SupersededTimeUnix,
+	}
+}
+
 // discoverGitRemoteLatestFn is overridable in tests.
 var discoverGitRemoteLatestFn = DiscoverGitRemoteLatest
 
 // SetDiscoverGitRemoteLatestForTest overrides remote discovery. The returned
 // function restores the previous implementation.
-func SetDiscoverGitRemoteLatestForTest(fn func(sourceID, installedVersion string) (version, commit string, err error)) (restore func()) {
+func SetDiscoverGitRemoteLatestForTest(fn func(sourceID, installedVersion string) (GitRemoteLatestResult, error)) (restore func()) {
 	prev := discoverGitRemoteLatestFn
 	if fn == nil {
 		discoverGitRemoteLatestFn = DiscoverGitRemoteLatest
@@ -373,11 +394,11 @@ func ResolveGitLatestRef(sourceID string) (string, error) {
 			return v, nil
 		}
 	}
-	ver, _, err := discoverGitRemoteLatestFn(sourceID, "latest")
+	result, err := discoverGitRemoteLatestFn(sourceID, "latest")
 	if err != nil {
 		return "", err
 	}
-	ver = strings.TrimSpace(ver)
+	ver := strings.TrimSpace(result.Version)
 	if ver == "" {
 		return "", fmt.Errorf("cannot resolve latest ref for %s", sourceID)
 	}
@@ -388,13 +409,13 @@ func ResolveGitLatestRef(sourceID string) (string, error) {
 // It considers the newest semver tag and preferred branch tips, then applies the
 // prefer-branch-over-release policy (default: prefer branch when the tag is ≥60d old
 // and the branch tip is newer by upstream date).
-func DiscoverGitRemoteLatest(sourceID, installedVersion string) (version, commit string, err error) {
+func DiscoverGitRemoteLatest(sourceID, installedVersion string) (GitRemoteLatestResult, error) {
 	if !IsGitHostedSourceID(sourceID) {
-		return "", "", fmt.Errorf("not a git-hosted source id: %s", sourceID)
+		return GitRemoteLatestResult{}, fmt.Errorf("not a git-hosted source id: %s", sourceID)
 	}
 	repoURL, err := gitRepoURLFromSourceID(sourceID)
 	if err != nil {
-		return "", "", err
+		return GitRemoteLatestResult{}, err
 	}
 
 	policy := GetPreferBranchPolicy()
@@ -430,17 +451,28 @@ func DiscoverGitRemoteLatest(sourceID, installedVersion string) (version, commit
 
 	decision := DecidePreferBranch(policy, now, hasTag, tagTime, hasBranch, branchTime)
 	if decision.UseBranch && hasBranch {
-		return branchName, branchCommit, nil
+		out := GitRemoteLatestResult{Version: branchName, Commit: branchCommit}
+		// Record the skipped tag when release-age-gap preferred the branch over a known tag.
+		if hasTag && decision.Reason == "release-age-gap" && !tagTime.IsZero() {
+			out.SupersededTag = tagName
+			out.SupersededCommit = tagCommit
+			out.SupersededTimeUnix = tagTime.Unix()
+		}
+		return out, nil
 	}
 	if hasTag && !decision.UseBranch {
-		return tagName, tagCommit, nil
+		return GitRemoteLatestResult{Version: tagName, Commit: tagCommit}, nil
 	}
 	if hasBranch {
-		return branchName, branchCommit, nil
+		return GitRemoteLatestResult{Version: branchName, Commit: branchCommit}, nil
 	}
 
 	// Fall back to installed / default branch when no preferred branch and no tag.
-	return resolveInstalledOrDefaultBranch(repoURL, installedVersion)
+	ref, commit, resolveErr := resolveInstalledOrDefaultBranch(repoURL, installedVersion)
+	if resolveErr != nil {
+		return GitRemoteLatestResult{}, resolveErr
+	}
+	return GitRemoteLatestResult{Version: ref, Commit: commit}, nil
 }
 
 // DiscoverNonRegistryGitPackages remotely discovers latest versions for installed git-hosted
@@ -494,12 +526,11 @@ func DiscoverNonRegistryGitPackagesContext(ctx context.Context, packages []local
 		id := strings.TrimSpace(pkg.SourceID)
 
 		var (
-			ver     string
-			commit  string
+			result  GitRemoteLatestResult
 			discErr error
 		)
 		action := func() {
-			ver, commit, discErr = discoverGitRemoteLatestFn(id, pkg.Version)
+			result, discErr = discoverGitRemoteLatestFn(id, pkg.Version)
 		}
 		if showProgress {
 			if spinErr := spinnerutil.Run(fmt.Sprintf("(%d/%d) Discovering non-registry package %s", i+1, total, id), action); spinnerutil.IsInterrupted(spinErr) {
@@ -509,16 +540,12 @@ func DiscoverNonRegistryGitPackagesContext(ctx context.Context, packages []local
 		} else {
 			action()
 		}
-		if discErr != nil || strings.TrimSpace(ver) == "" {
+		if discErr != nil || strings.TrimSpace(result.Version) == "" {
 			continue
 		}
-		ver = strings.TrimSpace(ver)
-		commit = strings.TrimSpace(commit)
-		db.RemoteLatest[id] = RemoteLatestEntry{
-			Version:     ver,
-			Commit:      commit,
-			CheckedUnix: now.Unix(),
-		}
+		ver := strings.TrimSpace(result.Version)
+		commit := strings.TrimSpace(result.Commit)
+		db.RemoteLatest[id] = result.toRemoteLatestEntry(now)
 		changed = true
 		pairs = append(pairs, DiscoveryPair{SourceID: id, Version: ver, Commit: commit})
 	}

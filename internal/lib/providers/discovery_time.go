@@ -18,6 +18,18 @@ type RemoteLatestEntry struct {
 	Version     string `json:"version"`
 	Commit      string `json:"commit,omitempty"`
 	CheckedUnix int64  `json:"checked_unix"`
+	// SupersededTag is the newest semver tag that was skipped when prefer-branch-over-release
+	// chose a branch tip (release-age-gap). Empty when no tag was superseded.
+	SupersededTag string `json:"superseded_tag,omitempty"`
+	// SupersededCommit is the commit SHA of SupersededTag.
+	SupersededCommit string `json:"superseded_commit,omitempty"`
+	// SupersededUnix is the upstream commit date of SupersededTag (unix seconds).
+	SupersededUnix int64 `json:"superseded_unix,omitempty"`
+}
+
+// HasSupersededTag reports whether prefer-branch recorded a skipped stale tag.
+func (e RemoteLatestEntry) HasSupersededTag() bool {
+	return strings.TrimSpace(e.SupersededTag) != ""
 }
 
 type discoveryDB struct {
@@ -247,9 +259,12 @@ func SetRemoteLatest(sourceID string, entry RemoteLatestEntry) error {
 		entry.CheckedUnix = time.Now().Unix()
 	}
 	db.RemoteLatest[sourceID] = RemoteLatestEntry{
-		Version:     strings.TrimSpace(entry.Version),
-		Commit:      strings.TrimSpace(entry.Commit),
-		CheckedUnix: entry.CheckedUnix,
+		Version:          strings.TrimSpace(entry.Version),
+		Commit:           strings.TrimSpace(entry.Commit),
+		CheckedUnix:      entry.CheckedUnix,
+		SupersededTag:    strings.TrimSpace(entry.SupersededTag),
+		SupersededCommit: strings.TrimSpace(entry.SupersededCommit),
+		SupersededUnix:   entry.SupersededUnix,
 	}
 	return writeDiscoveryDB(db)
 }

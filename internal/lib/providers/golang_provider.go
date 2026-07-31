@@ -234,9 +234,13 @@ func (p *GolangProvider) Sync() bool {
 		}
 		if !installed {
 			pkgRef := name + "@" + pkg.Version
+			// go install must not run inside APP_PACKAGES_DIR: that directory has an nvpm
+			// go.mod, and installing nested modules (e.g. golang.org/x/tools/gopls) from
+			// within another module resolves the wrong parent module version.
+			installDir := os.TempDir()
 			Logger.Info(fmt.Sprintf("Golang Sync: Package %s not installed, installing...", pkgRef))
-			Logger.Debug(fmt.Sprintf("Golang Sync: running: go install %s (GOBIN=%s, dir=%s)", pkgRef, gobin, p.APP_PACKAGES_DIR))
-			installCode, output, err := goShellOutCapture("go", []string{"install", pkgRef}, p.APP_PACKAGES_DIR, []string{"GOBIN=" + gobin})
+			Logger.Debug(fmt.Sprintf("Golang Sync: running: go install %s (GOBIN=%s, dir=%s)", pkgRef, gobin, installDir))
+			installCode, output, err := goShellOutCapture("go", []string{"install", pkgRef}, installDir, []string{"GOBIN=" + gobin})
 			if err != nil || installCode != 0 {
 				msg := strings.TrimSpace(output)
 				if msg == "" && err != nil {

@@ -16,6 +16,10 @@ func TestUpdateAllPackagesGolden(t *testing.T) {
 	// Update tests expect updates to proceed; disable min-release-age gating here.
 	cfg.Flags.MinReleaseAge = 0
 
+	oldDownload := downloadAndUnzipRegistryFn
+	downloadAndUnzipRegistryFn = func() (bool, error) { return false, nil }
+	t.Cleanup(func() { downloadAndUnzipRegistryFn = oldDownload })
+
 	t.Run("update all packages with empty data", func(t *testing.T) {
 		out := &MockOutputWriter{}
 		prevFactory := newUpdateService

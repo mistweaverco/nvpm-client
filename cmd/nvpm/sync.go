@@ -28,10 +28,8 @@ var syncRegistryCmd = &cobra.Command{
 This command downloads the registry file and extracts it to the app data directory.
 The registry URL list can be overridden using the NVPM_REGISTRY_URLS environment variable (comma/space-separated).`,
 	Run: func(cmd *cobra.Command, args []string) {
-		if !ShouldUseJSONOutput() && !ShouldUsePlainOutput() {
-			fmt.Println("Downloading registry...")
-		}
-		if _, err := syncRegistryFn(); err != nil {
+		refreshed, err := syncRegistryFn()
+		if err != nil {
 			if ShouldUseJSONOutput() {
 				result := map[string]interface{}{
 					"success": false,
@@ -43,6 +41,14 @@ The registry URL list can be overridden using the NVPM_REGISTRY_URLS environment
 			}
 			osExit(1)
 			return
+		}
+		if refreshed {
+			lock := local_packages_parser.GetData(true)
+			parser := newRegistryParser()
+			_ = providers.DiscoverNonRegistryGitPackages(lock.Packages, func(sourceID string) bool {
+				item := parser.GetBySourceId(sourceID)
+				return strings.TrimSpace(item.Source.ID) != ""
+			}, !ShouldUseJSONOutput() && !ShouldUsePlainOutput())
 		}
 		if ShouldUseJSONOutput() {
 			result := map[string]interface{}{

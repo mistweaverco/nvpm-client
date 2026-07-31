@@ -12,10 +12,20 @@ import (
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 )
 
+// RemoteLatestEntry caches the last remotely discovered latest version for a
+// package that is not present in the local registry snapshot.
+type RemoteLatestEntry struct {
+	Version     string `json:"version"`
+	Commit      string `json:"commit,omitempty"`
+	CheckedUnix int64  `json:"checked_unix"`
+}
+
 type discoveryDB struct {
 	// Key format: "<sourceId>@<version>" where version is a registry semver for immutable
 	// providers, or "tag+commit" / "commit" for git-hosted packages.
 	FirstSeenUnix map[string]int64 `json:"first_seen_unix"`
+	// RemoteLatest maps sourceID → last discovered remote latest (non-registry packages).
+	RemoteLatest map[string]RemoteLatestEntry `json:"remote_latest,omitempty"`
 }
 
 func discoveryDBPath() string {
@@ -28,15 +38,31 @@ func SetDiscoveryWritesEnabled(enabled bool) {
 	discoveryWritesEnabled = enabled
 }
 
+func emptyDiscoveryDB() discoveryDB {
+	return discoveryDB{
+		FirstSeenUnix: map[string]int64{},
+		RemoteLatest:  map[string]RemoteLatestEntry{},
+	}
+}
+
+func normalizeDiscoveryDB(db *discoveryDB) {
+	if db.FirstSeenUnix == nil {
+		db.FirstSeenUnix = map[string]int64{}
+	}
+	if db.RemoteLatest == nil {
+		db.RemoteLatest = map[string]RemoteLatestEntry{}
+	}
+}
+
 func readDiscoveryDB() (discoveryDB, error) {
 	if !discoveryWritesEnabled {
-		return discoveryDB{FirstSeenUnix: map[string]int64{}}, nil
+		return emptyDiscoveryDB(), nil
 	}
 	p := discoveryDBPath()
 	b, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return discoveryDB{FirstSeenUnix: map[string]int64{}}, nil
+			return emptyDiscoveryDB(), nil
 		}
 		return discoveryDB{}, err
 	}
@@ -44,9 +70,7 @@ func readDiscoveryDB() (discoveryDB, error) {
 	if err := json.Unmarshal(b, &db); err != nil {
 		return discoveryDB{}, err
 	}
-	if db.FirstSeenUnix == nil {
-		db.FirstSeenUnix = map[string]int64{}
-	}
+	normalizeDiscoveryDB(&db)
 	return db, nil
 }
 
@@ -187,4 +211,55 @@ func getOrSetFirstSeen(sourceID, version string, now time.Time) (time.Time, erro
 		return time.Time{}, err
 	}
 	return now, nil
+}
+
+// GetRemoteLatest returns the cached remote-latest entry for sourceID, if any.
+func GetRemoteLatest(sourceID string) (RemoteLatestEntry, bool, error) {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		return RemoteLatestEntry{}, false, nil
+	}
+	db, err := readDiscoveryDB()
+	if err != nil {
+		return RemoteLatestEntry{}, false, err
+	}
+	entry, ok := db.RemoteLatest[sourceID]
+	if !ok || strings.TrimSpace(entry.Version) == "" {
+		return RemoteLatestEntry{}, false, nil
+	}
+	return entry, true, nil
+}
+
+// SetRemoteLatest stores (or replaces) the remote-latest cache entry for sourceID.
+func SetRemoteLatest(sourceID string, entry RemoteLatestEntry) error {
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" || strings.TrimSpace(entry.Version) == "" {
+		return nil
+	}
+	if !discoveryWritesEnabled {
+		return nil
+	}
+	db, err := readDiscoveryDB()
+	if err != nil {
+		return err
+	}
+	if entry.CheckedUnix <= 0 {
+		entry.CheckedUnix = time.Now().Unix()
+	}
+	db.RemoteLatest[sourceID] = RemoteLatestEntry{
+		Version:     strings.TrimSpace(entry.Version),
+		Commit:      strings.TrimSpace(entry.Commit),
+		CheckedUnix: entry.CheckedUnix,
+	}
+	return writeDiscoveryDB(db)
+}
+
+// HasGitCommitUpdate reports whether installed and remote commits differ (both non-empty).
+func HasGitCommitUpdate(installedCommit, remoteCommit string) bool {
+	installedCommit = strings.TrimSpace(installedCommit)
+	remoteCommit = strings.TrimSpace(remoteCommit)
+	if installedCommit == "" || remoteCommit == "" {
+		return false
+	}
+	return !strings.EqualFold(installedCommit, remoteCommit)
 }

@@ -3,6 +3,7 @@ package providers
 import (
 	"testing"
 
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,4 +118,84 @@ func TestIsGenericDefaultBranchAlias(t *testing.T) {
 	assert.True(t, IsGenericDefaultBranchAlias("main"))
 	assert.True(t, IsGenericDefaultBranchAlias("HEAD"))
 	assert.False(t, IsGenericDefaultBranchAlias("release"))
+}
+
+func TestDiscoverGitRemoteLatestPrefersSemverTag(t *testing.T) {
+	old := gitDiscoveryShellOutCapture
+	defer func() { gitDiscoveryShellOutCapture = old }()
+	gitDiscoveryShellOutCapture = func(_ string, args []string, _ string, _ []string) (int, string, error) {
+		if len(args) >= 2 && args[0] == "ls-remote" && args[1] == "--tags" {
+			return 0, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/v1.0.0\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v2.0.0\n", nil
+		}
+		if len(args) >= 3 && args[0] == "ls-remote" && args[2] == "refs/tags/v2.0.0^{}" {
+			return 0, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/v2.0.0^{}\n", nil
+		}
+		return 1, "", nil
+	}
+
+	ver, commit, err := DiscoverGitRemoteLatest("github:o/plugin", "main")
+	require.NoError(t, err)
+	assert.Equal(t, "v2.0.0", ver)
+	assert.Equal(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", commit)
+}
+
+func TestDiscoverGitRemoteLatestFallsBackToBranch(t *testing.T) {
+	old := gitDiscoveryShellOutCapture
+	defer func() { gitDiscoveryShellOutCapture = old }()
+	gitDiscoveryShellOutCapture = func(_ string, args []string, _ string, _ []string) (int, string, error) {
+		if len(args) >= 2 && args[0] == "ls-remote" && args[1] == "--tags" {
+			return 0, "", nil // no tags
+		}
+		if len(args) >= 3 && args[0] == "ls-remote" && args[1] == "--symref" {
+			return 0, "ref: refs/heads/main\tHEAD\n", nil
+		}
+		if len(args) >= 3 && args[0] == "ls-remote" && args[2] == "refs/heads/main" {
+			return 0, "dddddddddddddddddddddddddddddddddddddddd\trefs/heads/main\n", nil
+		}
+		return 1, "", nil
+	}
+
+	ver, commit, err := DiscoverGitRemoteLatest("github:o/plugin", "latest")
+	require.NoError(t, err)
+	assert.Equal(t, "main", ver)
+	assert.Equal(t, "dddddddddddddddddddddddddddddddddddddddd", commit)
+}
+
+func TestDiscoverNonRegistryGitPackagesFiltersAndRecords(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { SetDiscoveryWritesEnabled(true) })
+
+	oldFn := discoverGitRemoteLatestFn
+	defer func() { discoverGitRemoteLatestFn = oldFn }()
+	discoverGitRemoteLatestFn = func(sourceID, installedVersion string) (string, string, error) {
+		assert.Equal(t, "github:o/manual", sourceID)
+		return "v9.9.9", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", nil
+	}
+
+	pkgs := []local_packages_parser.LocalPackageItem{
+		{SourceID: "npm:eslint", Version: "8.0.0"},
+		{SourceID: "github:o/inreg", Version: "v1.0.0", Commit: "1111111111111111111111111111111111111111"},
+		{SourceID: "github:o/manual", Version: "main", Commit: "0000000000000000000000000000000000000000"},
+	}
+	inRegistry := func(id string) bool {
+		return id == "npm:eslint" || id == "github:o/inreg"
+	}
+
+	require.NoError(t, DiscoverNonRegistryGitPackages(pkgs, inRegistry, false))
+
+	entry, ok, err := GetRemoteLatest("github:o/manual")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "v9.9.9", entry.Version)
+	assert.Equal(t, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", entry.Commit)
+
+	_, ok, err = GetRemoteLatest("github:o/inreg")
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	vers, err := ListDiscoveredVersions("github:o/manual")
+	require.NoError(t, err)
+	require.NotEmpty(t, vers)
+	assert.Equal(t, "v9.9.9+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", vers[0].Version)
 }

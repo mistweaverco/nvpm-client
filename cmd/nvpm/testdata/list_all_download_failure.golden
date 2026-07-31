@@ -1,4 +1,3 @@
 No packages found in the registry.
-[~] Downloading registry...
 [✗] Failed to download registry: assert.AnError general error for testing
 [*] Use 'nvpm' (without flags) to download the registry manually.

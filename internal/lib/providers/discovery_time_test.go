@@ -48,3 +48,32 @@ func TestEnforceMinReleaseAgeGitDiscoveryKey(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "github:o/r@v3.0.0+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 }
+
+func TestRemoteLatestGetSet(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { SetDiscoveryWritesEnabled(true) })
+
+	_, ok, err := GetRemoteLatest("github:o/plugin")
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	require.NoError(t, SetRemoteLatest("github:o/plugin", RemoteLatestEntry{
+		Version: "v2.0.0",
+		Commit:  "cccccccccccccccccccccccccccccccccccccccc",
+	}))
+
+	entry, ok, err := GetRemoteLatest("github:o/plugin")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "v2.0.0", entry.Version)
+	assert.Equal(t, "cccccccccccccccccccccccccccccccccccccccc", entry.Commit)
+	assert.Greater(t, entry.CheckedUnix, int64(0))
+}
+
+func TestHasGitCommitUpdate(t *testing.T) {
+	assert.False(t, HasGitCommitUpdate("", "abc"))
+	assert.False(t, HasGitCommitUpdate("abc", ""))
+	assert.False(t, HasGitCommitUpdate("abc", "ABC"))
+	assert.True(t, HasGitCommitUpdate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+}

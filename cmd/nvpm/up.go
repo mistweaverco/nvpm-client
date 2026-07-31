@@ -304,9 +304,20 @@ var newUpdateService = NewUpdateService
 
 // UpdateAllPackages updates all installed packages to their latest versions
 // Only updates packages that have updates available according to the registry data
+// (or cached remote_latest for non-registry git packages).
 func (us *UpdateService) UpdateAllPackages() bool {
+	// Refresh registry and discover non-registry git remotes when the snapshot was rebuilt.
+	refreshed, _ := downloadAndUnzipRegistryFn()
+	us.registry.GetData(refreshed)
+
 	// Get all installed packages
 	localPackages := us.localPackages.GetData(true).Packages
+	if refreshed {
+		_ = providers.DiscoverNonRegistryGitPackages(localPackages, func(sourceID string) bool {
+			stable, prerelease := us.registry.GetLatestVersions(sourceID)
+			return strings.TrimSpace(stable) != "" || strings.TrimSpace(prerelease) != ""
+		}, !ShouldUseJSONOutput())
+	}
 
 	if len(localPackages) == 0 {
 		us.output.Println("No packages are currently installed")
@@ -320,7 +331,7 @@ func (us *UpdateService) UpdateAllPackages() bool {
 	skippedCount := 0
 
 	for _, pkg := range localPackages {
-		hasUpdate := us.checkUpdateAvailability(pkg.SourceID, pkg.Version)
+		hasUpdate := us.checkUpdateAvailability(pkg.SourceID, pkg.Version, pkg.Commit)
 		if hasUpdate {
 			packagesToUpdate = append(packagesToUpdate, pkg)
 		} else {
@@ -373,13 +384,19 @@ func (us *UpdateService) UpdateAllPackages() bool {
 }
 
 // checkUpdateAvailability checks if an update is available for a package
-func (us *UpdateService) checkUpdateAvailability(sourceID, currentVersion string) bool {
-	stable, prerelease := us.registry.GetLatestVersions(sourceID)
+func (us *UpdateService) checkUpdateAvailability(sourceID, currentVersion, installedCommit string) bool {
+	stable, prerelease, remoteCommit := resolveUpdateCandidates(us.registry, sourceID)
 	if stable == "" && prerelease == "" {
-		// No registry info available - skip update check (conservative: don't update)
+		// No registry or remote-latest info available - skip update check
 		return false
 	}
 	latestVersion := chooseBestRemoteVersion(currentVersion, stable, prerelease)
+	if providers.HasGitCommitUpdate(installedCommit, remoteCommit) {
+		return true
+	}
+	if strings.TrimSpace(installedCommit) != "" && strings.TrimSpace(remoteCommit) != "" {
+		return false
+	}
 	// If local version is unknown or set to "latest", always show update to the concrete remote version
 	if currentVersion == "" || currentVersion == "latest" {
 		return true

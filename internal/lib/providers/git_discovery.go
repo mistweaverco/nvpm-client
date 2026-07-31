@@ -3,9 +3,11 @@ package providers
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
+	"github.com/mistweaverco/nvpm-client/internal/lib/spinnerutil"
 )
 
 var gitDiscoveryShellOutCapture = shell_out.ShellOutCapture
@@ -273,4 +275,147 @@ func persistGitHostedPackage(sourceID, tag, repoPath, repoURL string) error {
 
 func gitRevParseHEAD(dir string) (string, error) {
 	return defaultExternalQueriesGitRevParse(dir)
+}
+
+// discoverGitRemoteLatestFn is overridable in tests.
+var discoverGitRemoteLatestFn = DiscoverGitRemoteLatest
+
+// SetDiscoverGitRemoteLatestForTest overrides remote discovery. The returned
+// function restores the previous implementation.
+func SetDiscoverGitRemoteLatestForTest(fn func(sourceID, installedVersion string) (version, commit string, err error)) (restore func()) {
+	prev := discoverGitRemoteLatestFn
+	if fn == nil {
+		discoverGitRemoteLatestFn = DiscoverGitRemoteLatest
+	} else {
+		discoverGitRemoteLatestFn = fn
+	}
+	return func() { discoverGitRemoteLatestFn = prev }
+}
+
+// DiscoverGitRemoteLatest resolves the latest remote version and commit for a git-hosted package.
+// It prefers the newest semver tag from `git ls-remote --tags`; if none exist, it resolves
+// HEAD of the installed branch ref (or the repository default branch).
+func DiscoverGitRemoteLatest(sourceID, installedVersion string) (version, commit string, err error) {
+	if !IsGitHostedSourceID(sourceID) {
+		return "", "", fmt.Errorf("not a git-hosted source id: %s", sourceID)
+	}
+	repoURL, err := gitRepoURLFromSourceID(sourceID)
+	if err != nil {
+		return "", "", err
+	}
+
+	code, out, lsErr := gitDiscoveryShellOutCapture("git", []string{"ls-remote", "--tags", repoURL}, "", nil)
+	if lsErr == nil && code == 0 {
+		if tag, ok := pickLatestSemverTag(out); ok {
+			c, resolveErr := gitLsRemoteResolveCommit(repoURL, tag)
+			if resolveErr == nil && c != "" {
+				return tag, c, nil
+			}
+		}
+	}
+
+	ref := strings.TrimSpace(installedVersion)
+	switch {
+	case ref == "" || ref == "latest" || isGitCommitSHA(ref):
+		ref = ResolveGitDefaultBranch(repoURL, "")
+	case IsGenericDefaultBranchAlias(ref):
+		// Keep the installed alias if it resolves; otherwise fall back to the real default.
+		if c, resolveErr := gitLsRemoteResolveCommit(repoURL, ref); resolveErr == nil && c != "" {
+			return ref, c, nil
+		}
+		ref = ResolveGitDefaultBranch(repoURL, "")
+	}
+
+	c, resolveErr := gitLsRemoteResolveCommit(repoURL, ref)
+	if resolveErr != nil {
+		return "", "", resolveErr
+	}
+	return ref, c, nil
+}
+
+// DiscoverNonRegistryGitPackages remotely discovers latest versions for installed git-hosted
+// packages that are not present in the registry. Results are written to discovery.json
+// (remote_latest + first_seen). Call only when the registry snapshot was rebuilt.
+// When showProgress is true, each package is discovered behind its own CLI spinner.
+func DiscoverNonRegistryGitPackages(packages []local_packages_parser.LocalPackageItem, inRegistry func(sourceID string) bool, showProgress bool) error {
+	if !discoveryWritesEnabled || len(packages) == 0 {
+		return nil
+	}
+
+	candidates := make([]local_packages_parser.LocalPackageItem, 0)
+	for _, pkg := range packages {
+		id := strings.TrimSpace(pkg.SourceID)
+		if id == "" || !IsGitHostedSourceID(id) {
+			continue
+		}
+		if inRegistry != nil && inRegistry(id) {
+			continue
+		}
+		candidates = append(candidates, pkg)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	db, err := readDiscoveryDB()
+	if err != nil {
+		return err
+	}
+
+	pairs := make([]DiscoveryPair, 0)
+	changed := false
+	total := len(candidates)
+	for i, pkg := range candidates {
+		id := strings.TrimSpace(pkg.SourceID)
+
+		var (
+			ver     string
+			commit  string
+			discErr error
+		)
+		action := func() {
+			ver, commit, discErr = discoverGitRemoteLatestFn(id, pkg.Version)
+		}
+		if showProgress {
+			_ = spinnerutil.Run(fmt.Sprintf("(%d/%d) Discovering non-registry package %s", i+1, total, id), action)
+		} else {
+			action()
+		}
+		if discErr != nil || strings.TrimSpace(ver) == "" {
+			continue
+		}
+		ver = strings.TrimSpace(ver)
+		commit = strings.TrimSpace(commit)
+		db.RemoteLatest[id] = RemoteLatestEntry{
+			Version:     ver,
+			Commit:      commit,
+			CheckedUnix: now.Unix(),
+		}
+		changed = true
+		pairs = append(pairs, DiscoveryPair{SourceID: id, Version: ver, Commit: commit})
+	}
+
+	for _, p := range pairs {
+		enriched, enrichErr := enrichDiscoveryPair(p)
+		if enrichErr != nil {
+			continue
+		}
+		id := enriched.SourceID
+		ver := enriched.Version
+		if id == "" || ver == "" || ver == "latest" {
+			continue
+		}
+		k := discoveryKey(id, ver)
+		if unix, ok := db.FirstSeenUnix[k]; ok && unix > 0 {
+			continue
+		}
+		db.FirstSeenUnix[k] = now.Unix()
+		changed = true
+	}
+
+	if !changed {
+		return nil
+	}
+	return writeDiscoveryDB(db)
 }

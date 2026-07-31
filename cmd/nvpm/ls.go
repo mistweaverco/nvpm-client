@@ -355,6 +355,11 @@ func (ls *ListService) gitDiscoveredRefsFromDB(sourceID string) ([]gitDiscovered
 
 func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, installedCommit string) discoveryDisplay {
 	stable, prerelease := ls.registry.GetLatestVersions(sourceID)
+	if stable == "" && prerelease == "" {
+		if entry, ok, err := providers.GetRemoteLatest(sourceID); err == nil && ok {
+			stable = entry.Version
+		}
+	}
 	avail := make([]string, 0, 2)
 	if v := strings.TrimSpace(stable); v != "" && v != "latest" {
 		if providers.IsGitCommitHash(v) {
@@ -523,6 +528,22 @@ func (ls *ListService) recordDiscoveryOnRegistryRefresh(refreshed bool, buildPai
 	_ = providers.RecordDiscoveryBatch(pairs)
 }
 
+func (ls *ListService) packageInRegistry(sourceID string) bool {
+	stable, prerelease := ls.registry.GetLatestVersions(sourceID)
+	return strings.TrimSpace(stable) != "" || strings.TrimSpace(prerelease) != ""
+}
+
+func (ls *ListService) discoverNonRegistryInstalled(localPackages []local_packages_parser.LocalPackageItem) {
+	showProgress := showDiscoveryProgress && !ShouldUseJSONOutput()
+	_ = providers.DiscoverNonRegistryGitPackages(localPackages, ls.packageInRegistry, showProgress)
+}
+
+func (ls *ListService) recordRegistryDiscoveriesAfterRefresh(refreshed bool, localPackages []local_packages_parser.LocalPackageItem) {
+	ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
+		return ls.discoveryPairsForInstalled(localPackages)
+	})
+}
+
 // ListInstalledPackages lists locally installed packages.
 // Name filters (opts.NameFilters) match IDs, names, or registry aliases (substring, case-insensitive).
 // Optional opts.OnlyOutdated, OnlyProviders, and OnlyCategories are applied in addition (AND).
@@ -531,30 +552,21 @@ func (ls *ListService) ListInstalledPackages(opts ListQueryOptions) {
 	var refreshed bool
 	filters := opts.NameFilters
 
-	discovery := func() {
-		ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
-			return ls.discoveryPairsForInstalled(localPackages)
-		})
-	}
-
-	upRegistry := func() {
-		refreshed, _ = ls.fileDownloader.DownloadAndUnzipRegistryQuiet()
-		localPackages = ls.localPackages.GetData(true).Packages
-		ls.registry.GetData(refreshed)
-		if refreshed {
-			_ = spinnerutil.Run("Releases discovery (min-age) ...", discovery)
+	// Download uses its own top-level spinner (clears when finished) so it does not
+	// leave a permanent line and is not nested under a prep spinner.
+	refreshed, _ = ls.fileDownloader.DownloadAndUnzipRegistry()
+	localPackages = ls.localPackages.GetData(true).Packages
+	ls.registry.GetData(refreshed)
+	if refreshed {
+		if ls.shouldShowListPrepSpinner() {
+			_ = spinnerutil.Run("Releases discovery (min-age) ...", func() {
+				ls.recordRegistryDiscoveriesAfterRefresh(true, localPackages)
+			})
+		} else {
+			ls.recordRegistryDiscoveriesAfterRefresh(true, localPackages)
 		}
-	}
-
-	if ls.shouldShowListPrepSpinner() {
-		_ = spinnerutil.Run("Preparing package list...", upRegistry)
-	} else {
-		refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistry()
-		localPackages = ls.localPackages.GetData(true).Packages
-		ls.registry.GetData(refreshed)
-		ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
-			return ls.discoveryPairsForInstalled(localPackages)
-		})
+		// Per-package remotes also use top-level spinners after download has cleared.
+		ls.discoverNonRegistryInstalled(localPackages)
 	}
 
 	// Truncate git commit hashes to 7 characters for display
@@ -636,7 +648,7 @@ func (ls *ListService) applyAdvancedFiltersToInstalled(packages []local_packages
 			}
 		}
 		if opts.OnlyOutdated {
-			if _, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version); !hasUpdate {
+			if _, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version, pkg.Commit); !hasUpdate {
 				continue
 			}
 		}
@@ -712,7 +724,7 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 			markdown.WriteString("|------------|-----------|-----------|------------|----------|\n")
 
 			for _, pkg := range packages {
-				updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version)
+				updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version, pkg.Commit)
 				// Clean up update info for table display (remove icons, keep text)
 				statusText := strings.ReplaceAll(updateInfo, IconRefresh(), "")
 				statusText = strings.ReplaceAll(statusText, IconCheckCircle(), "")
@@ -814,7 +826,7 @@ func (ls *ListService) listInstalledPackagesPlain(filteredPackages []local_packa
 		if packages, exists := packagesByProvider[provider]; exists {
 			fmt.Printf("%s %s Packages:\n", IconDiamond(), strings.ToUpper(provider))
 			for _, pkg := range packages {
-				updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version)
+				updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version, pkg.Commit)
 				fmt.Printf("   %s %s (v%s) %s\n", getProviderIcon(provider), pkg.SourceID, pkg.Version, updateInfo)
 				disc := ls.discoveryDisplayForInstalled(pkg.SourceID, pkg.Version, pkg.Commit)
 				if cfg.Flags.MinReleaseAge > 0 {
@@ -869,7 +881,7 @@ func (ls *ListService) listInstalledPackagesJSON(filteredPackages []local_packag
 	for _, pkg := range filteredPackages {
 		packageName := getPackageNameFromSourceID(pkg.SourceID)
 		provider := getProviderFromSourceID(pkg.SourceID)
-		_, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version)
+		_, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version, pkg.Commit)
 		disc := ls.discoveryDisplayForInstalled(pkg.SourceID, pkg.Version, pkg.Commit)
 
 		pkgData := map[string]any{
@@ -902,36 +914,27 @@ func (ls *ListService) ListAllPackages(opts ListQueryOptions) {
 	var registry []registry_parser.RegistryItem
 	filters := opts.NameFilters
 
-	prep := func() {
-		refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistryQuiet()
-		registry = ls.registry.GetData(refreshed)
-		ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
-			return ls.discoveryPairsForRegistry(registry)
-		})
-	}
-
-	if ls.shouldShowListPrepSpinner() {
-		_ = spinnerutil.Run("Preparing package list...", prep)
-	} else {
-		refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistry()
-		registry = ls.registry.GetData(refreshed)
-		ls.recordDiscoveryOnRegistryRefresh(refreshed, func() []providers.DiscoveryPair {
-			return ls.discoveryPairsForRegistry(registry)
-		})
+	refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistry()
+	registry = ls.registry.GetData(refreshed)
+	if refreshed {
+		record := func() {
+			ls.recordDiscoveryOnRegistryRefresh(true, func() []providers.DiscoveryPair {
+				return ls.discoveryPairsForRegistry(registry)
+			})
+		}
+		if ls.shouldShowListPrepSpinner() {
+			_ = spinnerutil.Run("Releases discovery (min-age) ...", record)
+		} else {
+			record()
+		}
 	}
 
 	if len(registry) == 0 {
 		if !ShouldUseJSONOutput() {
-			if ShouldUsePlainOutput() {
-				fmt.Println("No packages found in the registry.")
-				fmt.Println("[~] Downloading registry...")
-			} else {
-				fmt.Println("No packages found in the registry.")
-				fmt.Printf("%s Downloading registry...\n", IconRefresh())
-			}
+			fmt.Println("No packages found in the registry.")
 		}
 
-		// Try to download the registry
+		// Try to download the registry (spinner clears when done).
 		retriedRefreshed, err := ls.fileDownloader.DownloadAndUnzipRegistry()
 		if err != nil {
 			if ShouldUseJSONOutput() {
@@ -1060,7 +1063,7 @@ func (ls *ListService) applyAdvancedFiltersToRegistry(items []registry_parser.Re
 			if !ok {
 				continue
 			}
-			if _, hasUpdate := ls.checkUpdateAvailability(id, installedVer); !hasUpdate {
+			if _, hasUpdate := ls.checkUpdateAvailability(id, installedVer, ""); !hasUpdate {
 				continue
 			}
 		}
@@ -1126,7 +1129,7 @@ func (ls *ListService) listAllPackagesRich(filteredRegistry []registry_parser.Re
 				// Build status text
 				statusText := ""
 				if isInstalled {
-					updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.Source.ID, installedVersion)
+					updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.Source.ID, installedVersion, "")
 					if hasUpdate {
 						// Clean up update info for table display
 						statusText = strings.ReplaceAll(updateInfo, IconRefresh(), "")
@@ -1290,7 +1293,7 @@ func (ls *ListService) listAllPackagesJSON(filteredRegistry []registry_parser.Re
 
 		if isInstalled {
 			pkgData["installed_version"] = installedVersion
-			_, hasUpdate := ls.checkUpdateAvailability(pkg.Source.ID, installedVersion)
+			_, hasUpdate := ls.checkUpdateAvailability(pkg.Source.ID, installedVersion, "")
 			pkgData["has_update"] = hasUpdate
 		}
 
@@ -1306,13 +1309,22 @@ func (ls *ListService) listAllPackagesJSON(filteredRegistry []registry_parser.Re
 	PrintJSON(result)
 }
 
-// checkUpdateAvailability checks if an update is available for a package
-func (ls *ListService) checkUpdateAvailability(sourceID, currentVersion string) (string, bool) {
-	stable, prerelease := ls.registry.GetLatestVersions(sourceID)
+// checkUpdateAvailability checks if an update is available for a package.
+// installedCommit is optional; when set alongside a cached remote commit for
+// non-registry git packages, commit inequality decides outdated status.
+func (ls *ListService) checkUpdateAvailability(sourceID, currentVersion, installedCommit string) (string, bool) {
+	stable, prerelease, remoteCommit := resolveUpdateCandidates(ls.registry, sourceID)
 	if stable == "" && prerelease == "" {
-		return "", false // No registry info available
+		return "", false // No registry or remote-latest info available
 	}
 	latestVersion := chooseBestRemoteVersion(currentVersion, stable, prerelease)
+	if providers.HasGitCommitUpdate(installedCommit, remoteCommit) {
+		return fmt.Sprintf("%s Update available: v%s", IconRefresh(), latestVersion), true
+	}
+	if strings.TrimSpace(installedCommit) != "" && strings.TrimSpace(remoteCommit) != "" {
+		// Commits match: treat as up to date even if version strings differ (e.g. branch aliases).
+		return IconCheckCircle() + " Up to date", false
+	}
 	// If local version is unknown or set to "latest", always show update to the concrete remote version
 	if currentVersion == "" || currentVersion == "latest" {
 		return fmt.Sprintf("%s Update available: v%s", IconRefresh(), latestVersion), true
@@ -1322,6 +1334,20 @@ func (ls *ListService) checkUpdateAvailability(sourceID, currentVersion string) 
 		return fmt.Sprintf("%s Update available: v%s", IconRefresh(), latestVersion), true
 	}
 	return IconCheckCircle() + " Up to date", false
+}
+
+// resolveUpdateCandidates returns registry stable/prerelease versions, falling back to
+// the cached remote_latest entry for packages not present in the registry.
+func resolveUpdateCandidates(registry RegistryProvider, sourceID string) (stable, prerelease, remoteCommit string) {
+	stable, prerelease = registry.GetLatestVersions(sourceID)
+	if strings.TrimSpace(stable) != "" || strings.TrimSpace(prerelease) != "" {
+		return stable, prerelease, ""
+	}
+	entry, ok, err := providers.GetRemoteLatest(sourceID)
+	if err != nil || !ok {
+		return "", "", ""
+	}
+	return entry.Version, "", entry.Commit
 }
 
 // Default implementations for backward compatibility
@@ -1386,7 +1412,7 @@ func listAllPackages() {
 
 func checkUpdateAvailability(sourceID, currentVersion string) (string, bool) {
 	service := NewListService()
-	return service.checkUpdateAvailability(sourceID, currentVersion)
+	return service.checkUpdateAvailability(sourceID, currentVersion, "")
 }
 
 func getProviderFromSourceID(sourceID string) string {

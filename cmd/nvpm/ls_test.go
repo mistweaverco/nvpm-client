@@ -723,7 +723,7 @@ func TestCheckUpdateAvailability(t *testing.T) {
 			&MockFileDownloader{},
 		)
 
-		updateInfo, hasUpdate := service.checkUpdateAvailability("pkg:npm/test", "1.0.0")
+		updateInfo, hasUpdate := service.checkUpdateAvailability("pkg:npm/test", "1.0.0", "")
 		assert.Equal(t, "", updateInfo)
 		assert.False(t, hasUpdate)
 	})
@@ -748,7 +748,7 @@ func TestCheckUpdateAvailability(t *testing.T) {
 			&MockFileDownloader{},
 		)
 
-		updateInfo, hasUpdate := service.checkUpdateAvailability("pkg:npm/test", "1.0.0")
+		updateInfo, hasUpdate := service.checkUpdateAvailability("pkg:npm/test", "1.0.0", "")
 		assert.Contains(t, updateInfo, "[~] Update available: v2.0.0")
 		assert.True(t, hasUpdate)
 	})
@@ -773,7 +773,7 @@ func TestCheckUpdateAvailability(t *testing.T) {
 			&MockFileDownloader{},
 		)
 
-		updateInfo, hasUpdate := service.checkUpdateAvailability("pkg:npm/test", "")
+		updateInfo, hasUpdate := service.checkUpdateAvailability("pkg:npm/test", "", "")
 		assert.Contains(t, updateInfo, "[~] Update available: v2.0.0")
 		assert.True(t, hasUpdate)
 	})
@@ -798,7 +798,7 @@ func TestCheckUpdateAvailability(t *testing.T) {
 			&MockFileDownloader{},
 		)
 
-		updateInfo, hasUpdate := service.checkUpdateAvailability("pkg:npm/test", "2.0.0")
+		updateInfo, hasUpdate := service.checkUpdateAvailability("pkg:npm/test", "2.0.0", "")
 		assert.Equal(t, "[✓] Up to date", updateInfo)
 		assert.False(t, hasUpdate)
 	})

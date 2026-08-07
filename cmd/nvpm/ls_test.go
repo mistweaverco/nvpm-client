@@ -529,6 +529,31 @@ func TestListInstalledPackagesAdvancedFilters(t *testing.T) {
 		svc.ListInstalledPackages(ListQueryOptions{OnlyOutdated: true, OnlyProviders: []string{"pypi"}})
 	})
 	assert.Contains(t, out4, "No installed packages match")
+
+	out5 := captureOutput(t, func() {
+		svc.ListInstalledPackages(ListQueryOptions{ShowFilters: []string{"categories:*lsp*"}})
+	})
+	assert.Contains(t, out5, "npm:pkg-a")
+	assert.NotContains(t, out5, "pypi:pkg-b")
+}
+
+func TestListInstalledPackagesOnlyAlwaysTrusted(t *testing.T) {
+	mockLocal := &MockLocalPackagesProvider{
+		GetDataFunc: func(force bool) local_packages_parser.LocalPackageRoot {
+			return local_packages_parser.LocalPackageRoot{
+				Packages: []local_packages_parser.LocalPackageItem{
+					{SourceID: "npm:trusted", Version: "1.0.0", Extras: &local_packages_parser.PackageExtras{AlwaysTrust: true}},
+					{SourceID: "npm:normal", Version: "1.0.0"},
+				},
+			}
+		},
+	}
+	svc := NewListServiceWithDependencies(mockLocal, &MockRegistryProvider{}, &MockUpdateChecker{}, &MockFileDownloader{})
+	out := captureOutput(t, func() {
+		svc.ListInstalledPackages(ListQueryOptions{OnlyAlwaysTrusted: true})
+	})
+	assert.Contains(t, out, "npm:trusted")
+	assert.NotContains(t, out, "npm:normal")
 }
 
 func TestListAllPackagesAdvancedFilters(t *testing.T) {
@@ -827,6 +852,8 @@ func TestListCommand(t *testing.T) {
 		assert.NotNil(t, lsCmd.Flags().Lookup("only-outdated"))
 		assert.NotNil(t, lsCmd.Flags().Lookup("only-providers"))
 		assert.NotNil(t, lsCmd.Flags().Lookup("only-categories"))
+		assert.NotNil(t, lsCmd.Flags().Lookup("only-always-trusted"))
+		assert.NotNil(t, lsCmd.Flags().Lookup("filter"))
 	})
 }
 

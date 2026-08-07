@@ -159,6 +159,10 @@
                     }
                   }
                 }
+              },
+              "always_trust": {
+                "type": "boolean",
+                "description": "When true, skip min-release-age for this package on install/update. Unlike --force, this persists in the lock file."
               }
             }
           }

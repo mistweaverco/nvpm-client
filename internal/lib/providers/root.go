@@ -51,6 +51,9 @@ func enforceMinReleaseAge(sourceID, version string) error {
 	if p.BypassAll || p.Force || p.MinAge <= 0 {
 		return nil
 	}
+	if PackageAlwaysTrust(sourceID) {
+		return nil
+	}
 	if version == "" || version == "latest" {
 		// We only gate concrete versions.
 		return nil

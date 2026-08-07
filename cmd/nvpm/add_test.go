@@ -21,6 +21,10 @@ func TestInstallCommand(t *testing.T) {
 	aliases := addCmd.Aliases
 	assert.Contains(t, aliases, "install")
 	assert.Len(t, aliases, 1)
+
+	assert.NotNil(t, addCmd.Flags().Lookup("always-trust"))
+	assert.NotNil(t, addCmd.Flags().Lookup("no-always-trust"))
+	assert.NotNil(t, addCmd.Flags().Lookup("filter"))
 }
 
 func TestInstallCommandArgs(t *testing.T) {

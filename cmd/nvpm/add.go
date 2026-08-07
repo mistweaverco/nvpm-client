@@ -126,6 +126,11 @@ Examples:
 	// Enable shell completion for package IDs based on the local registry.
 	ValidArgsFunction: packageIDCompletion,
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := validateAlwaysTrustFlags(); err != nil {
+			fmt.Printf("%s %v\n", IconClose(), err)
+			osExit(1)
+			return
+		}
 		providers.SetMinReleaseAgePolicy(providers.MinReleaseAgePolicy{
 			MinAge: cfg.Flags.MinReleaseAge,
 			Force:  installForce,
@@ -217,6 +222,9 @@ Examples:
 
 				// Process all selected packages
 				for _, selectedSourceID := range selectedSourceIDs {
+					if !packageMatchesShowFilters(selectedSourceID, getShowFilters(cmd)) {
+						continue
+					}
 					internalID := selectedSourceID
 					// selectedSourceID is already in provider:package-id format, use it directly
 					displayID := selectedSourceID
@@ -234,6 +242,7 @@ Examples:
 						failures = append(failures, displayID)
 						continue
 					}
+					applyPendingAlwaysTrust(internalID)
 
 					// Resolve version before installing to show actual version in spinner
 					resolvedVersion, err := resolveVersionFn(internalID, version)
@@ -241,6 +250,7 @@ Examples:
 						printProviderRequirementError(displayID, err)
 						failureCount++
 						failures = append(failures, displayID)
+						clearPendingAlwaysTrust(internalID)
 						continue
 					}
 
@@ -257,6 +267,7 @@ Examples:
 						fmt.Printf("%s %v\n", IconClose(), err)
 						failureCount++
 						failures = append(failures, displayID)
+						clearPendingAlwaysTrust(internalID)
 						continue
 					}
 					providers.SetRequestedIntegrations(effectiveIntegrations)
@@ -266,6 +277,7 @@ Examples:
 						fmt.Printf("%s %v\n", IconClose(), kindErr)
 						failureCount++
 						failures = append(failures, displayID)
+						clearPendingAlwaysTrust(internalID)
 						continue
 					}
 
@@ -281,6 +293,7 @@ Examples:
 						failures = append(failures, displayID)
 						fmt.Printf("%s Failed to install %s@%s: %v\n", IconClose(), displayID, resolvedVersion, err)
 						clearPendingUpdateResolution(internalID)
+						clearPendingAlwaysTrust(internalID)
 						continue
 					}
 
@@ -288,6 +301,7 @@ Examples:
 						successCount++
 						_ = local_packages_parser.MergePackageIntegrations(internalID, effectiveIntegrations)
 						persistUpdateResolutionAfterInstall(internalID)
+						persistAlwaysTrustAfterInstall(internalID)
 						fmt.Printf("%s Successfully installed %s@%s\n", IconCheck(), displayID, resolvedVersion)
 						for _, line := range providers.ConsumeIntegrationReport(internalID, resolvedVersion) {
 							fmt.Printf("  %s@%s: %s\n", internalID, resolvedVersion, line)
@@ -297,6 +311,7 @@ Examples:
 						failures = append(failures, displayID)
 						printInstallFailure(displayID, resolvedVersion)
 						clearPendingUpdateResolution(internalID)
+						clearPendingAlwaysTrust(internalID)
 					}
 				}
 				continue // Skip the single package processing below
@@ -323,12 +338,17 @@ Examples:
 				continue
 			}
 
+			if !packageMatchesShowFilters(internalID, getShowFilters(cmd)) {
+				continue
+			}
+
 			if err := applyPendingUpdateResolution(internalID); err != nil {
 				fmt.Printf("%s Invalid --update-resolution: %v\n", IconClose(), err)
 				failureCount++
 				failures = append(failures, displayID)
 				continue
 			}
+			applyPendingAlwaysTrust(internalID)
 
 			// Resolve version before installing to show actual version in spinner
 			resolvedVersion, err := resolveVersionFn(internalID, version)
@@ -336,6 +356,7 @@ Examples:
 				printProviderRequirementError(displayID, err)
 				failureCount++
 				failures = append(failures, displayID)
+				clearPendingAlwaysTrust(internalID)
 				continue
 			}
 
@@ -352,6 +373,7 @@ Examples:
 				fmt.Printf("%s %v\n", IconClose(), err)
 				failureCount++
 				failures = append(failures, displayID)
+				clearPendingAlwaysTrust(internalID)
 				continue
 			}
 			providers.SetRequestedIntegrations(effectiveIntegrations)
@@ -361,6 +383,7 @@ Examples:
 				fmt.Printf("%s %v\n", IconClose(), kindErr)
 				failureCount++
 				failures = append(failures, displayID)
+				clearPendingAlwaysTrust(internalID)
 				continue
 			}
 
@@ -376,6 +399,7 @@ Examples:
 				failures = append(failures, displayID)
 				fmt.Printf("%s Failed to install %s@%s: %v\n", IconClose(), displayID, resolvedVersion, err)
 				clearPendingUpdateResolution(internalID)
+				clearPendingAlwaysTrust(internalID)
 				continue
 			}
 
@@ -383,6 +407,7 @@ Examples:
 				successCount++
 				_ = local_packages_parser.MergePackageIntegrations(internalID, effectiveIntegrations)
 				persistUpdateResolutionAfterInstall(internalID)
+				persistAlwaysTrustAfterInstall(internalID)
 				fmt.Printf("%s Successfully installed %s@%s\n", IconCheck(), displayID, resolvedVersion)
 				for _, line := range providers.ConsumeIntegrationReport(internalID, resolvedVersion) {
 					fmt.Printf("  %s@%s: %s\n", internalID, resolvedVersion, line)
@@ -392,6 +417,7 @@ Examples:
 				failures = append(failures, displayID)
 				printInstallFailure(displayID, resolvedVersion)
 				clearPendingUpdateResolution(internalID)
+				clearPendingAlwaysTrust(internalID)
 			}
 		}
 
@@ -450,8 +476,11 @@ func init() {
 	addCmd.Flags().StringSliceVar(&installIntegrations, "integrate", nil, "run integration backends after install (e.g. --integrate neovim)")
 	addCmd.Flags().StringVar(&installExternalTreeSitterQueries, "external-treesitter-queries", "ask", "when Neovim integration needs optional query-only git repos from the registry: ask (default), always, never (overridden by NVPM_EXTERNAL_TREESITTER_QUERIES when this flag is left at default)")
 	addCmd.Flags().BoolVar(&installForce, "force", false, "bypass min-release-age safety checks")
+	addCmd.Flags().BoolVar(&installAlwaysTrust, "always-trust", false, "persistently skip min-release-age for this package (stored in lock extras.always_trust)")
+	addCmd.Flags().BoolVar(&installNoAlwaysTrust, "no-always-trust", false, "clear extras.always_trust for this package")
 	addCmd.Flags().StringVar(&installUpdateResolution, "update-resolution", "", "git-only: override update-resolution for this package (e.g. always, release-age-gap:30d, branches:main,develop)")
 	addCmd.Flags().StringVar(&installPluginEditor, "plugin", "", "install as an editor plugin (under plugins/ instead of packages/); supported: neovim")
+	registerShowFilterFlag(addCmd)
 }
 
 func printInstallFailure(displayID, resolvedVersion string) {

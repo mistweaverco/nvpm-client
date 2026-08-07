@@ -237,6 +237,12 @@ func TestUpdateCommand(t *testing.T) {
 		assert.Equal(t, "A", allFlag.Shorthand)
 		assert.Equal(t, "Update all installed packages to their latest versions", allFlag.Usage)
 	})
+
+	t.Run("update command has always-trust and filter flags", func(t *testing.T) {
+		assert.NotNil(t, upCmd.Flags().Lookup("always-trust"))
+		assert.NotNil(t, upCmd.Flags().Lookup("no-always-trust"))
+		assert.NotNil(t, upCmd.Flags().Lookup("filter"))
+	})
 }
 
 func TestUpdateCommandRunPaths(t *testing.T) {

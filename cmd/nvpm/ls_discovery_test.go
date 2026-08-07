@@ -55,7 +55,7 @@ func runListQuiet(t *testing.T, fn func()) {
 	_, _ = io.Copy(io.Discard, r)
 }
 
-func TestRecordDiscoveryOnRegistryRefreshSkipsWarmCache(t *testing.T) {
+func TestRecordDiscoveryOnWarmCacheLazyRecordsForAvailable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("NVPM_HOME", home)
 	_ = files.GetAppDataPath()
@@ -69,12 +69,19 @@ func TestRecordDiscoveryOnRegistryRefreshSkipsWarmCache(t *testing.T) {
 	showDiscoveryProgress = false
 	showRegistryProgress = false
 
+	// Warm registry cache still lazy-records newer candidates so Available can show "in X days".
 	runListQuiet(t, func() {
 		listDiscoveryTestService(false).ListInstalledPackages(ListQueryOptions{})
 	})
 
-	_, err := os.Stat(filepath.Join(files.GetAppDataPath(), "discovery.json"))
-	assert.True(t, os.IsNotExist(err))
+	b, err := os.ReadFile(filepath.Join(files.GetAppDataPath(), "discovery.json"))
+	require.NoError(t, err)
+	var db struct {
+		FirstSeenUnix map[string]int64 `json:"first_seen_unix"`
+	}
+	require.NoError(t, json.Unmarshal(b, &db))
+	_, ok := db.FirstSeenUnix["npm:eslint@9.0.0"]
+	assert.True(t, ok)
 }
 
 func TestRecordDiscoveryOnRegistryRefreshRecordsAfterRefresh(t *testing.T) {
@@ -379,6 +386,42 @@ func TestDiscoveryDisplayPreferBranchEligibleSoon(t *testing.T) {
 	assert.Empty(t, disc.Eligible)
 	require.Len(t, disc.EligibleSoon, 1)
 	assert.Equal(t, "main (322c79d) in 7 days", disc.EligibleSoon[0])
+}
+
+func TestDiscoveryDisplayNonGitRecordsFirstSeenAndShowsEligibleSoon(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NVPM_HOME", home)
+	_ = files.GetAppDataPath()
+
+	providers.SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
+
+	cfg.Flags.MinReleaseAge = 7 * 24 * time.Hour
+	t.Cleanup(func() { cfg.Flags.MinReleaseAge = 0 })
+
+	svc := NewListServiceWithDependencies(
+		&MockLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(string) (string, string) { return "4.11.0", "" },
+			GetDataFunc: func(bool) []registry_parser.RegistryItem {
+				return []registry_parser.RegistryItem{{
+					Source:  registry_parser.RegistryItemSource{ID: "npm:eslint"},
+					Version: "4.11.0",
+				}}
+			},
+		},
+		&MockUpdateChecker{},
+		&MockFileDownloader{},
+	)
+
+	disc := svc.discoveryDisplayForInstalled("npm:eslint", "4.10.0", "")
+	require.Len(t, disc.EligibleSoon, 1)
+	assert.Equal(t, "4.11.0 in 7 days", disc.EligibleSoon[0])
+	assert.Equal(t, disc.EligibleSoon, mergedAvailableColumn(disc))
+
+	_, seen, err := providers.GetFirstSeen("npm:eslint", "4.11.0")
+	require.NoError(t, err)
+	assert.True(t, seen)
 }
 
 func TestDiscoveryDisplayRecordsFirstSeenAndShowsEligibleSoon(t *testing.T) {

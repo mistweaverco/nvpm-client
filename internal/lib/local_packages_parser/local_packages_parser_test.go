@@ -531,6 +531,44 @@ func TestLocalPackagesParserWithMock(t *testing.T) {
 			assert.Equal(t, KindNeovimPlugin, saved.Packages[0].Extras.Kind)
 		}
 	})
+
+	t.Run("merge package always_trust sets and clears", func(t *testing.T) {
+		existingData := LocalPackageRoot{
+			Packages: []LocalPackageItem{
+				{SourceID: "npm:eslint", Version: "9.0.0"},
+			},
+		}
+		jsonData, _ := json.Marshal(existingData)
+
+		var written []byte
+		mockFileManager := &MockFileManager{
+			GetAppLocalPackagesFilePathFunc: func() string { return "/mock/path/local-packages.json" },
+			FileExistsFunc:                  func(path string) bool { return true },
+			ReadFileFunc: func(path string) ([]byte, error) {
+				if written != nil {
+					return written, nil
+				}
+				return jsonData, nil
+			},
+			WriteFileFunc: func(path string, data []byte, perm uint32) error { written = data; return nil },
+		}
+
+		parser := NewWithFileManager(mockFileManager)
+		err := parser.MergePackageAlwaysTrust("npm:eslint", true)
+		assert.NoError(t, err)
+
+		var saved LocalPackageRoot
+		_ = json.Unmarshal(written, &saved)
+		if assert.NotNil(t, saved.Packages[0].Extras) {
+			assert.True(t, saved.Packages[0].Extras.AlwaysTrust)
+		}
+
+		err = parser.MergePackageAlwaysTrust("npm:eslint", false)
+		assert.NoError(t, err)
+		saved = LocalPackageRoot{}
+		_ = json.Unmarshal(written, &saved)
+		assert.Nil(t, saved.Packages[0].Extras)
+	})
 }
 
 func TestMockFileManager(t *testing.T) {

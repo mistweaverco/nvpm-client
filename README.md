@@ -332,17 +332,28 @@ Optional list constraints (combinable with each other and with name filters):
 - `--only-categories`: comma-separated category tokens; a package matches if
   any of its registry categories matches any token (substring match,
   case-insensitive), for example `lsp,tree-sitter-parser`.
+- `--only-always-trusted`: show only packages with `extras.always_trust` in
+  the lockfile.
+- `--filter '[.]path:value'`: repeatable AND filters over the same fields as
+  `nvpm show -o json` (see Filter DSL below).
 
 ```sh
 nvpm ls --only-outdated
 nvpm ls --only-providers pypi --only-categories lsp
 nvpm ls -A --only-providers npm --only-outdated
+nvpm ls --only-always-trusted
+nvpm ls --filter 'categories:*tree*' --filter 'provider:github'
 ```
 
 Installed list output uses three columns: **Package ID**, **Installed**, and **Available**.
 The Available column shows install candidates (tags, branches, or `semver` versions) that
 have passed local discovery, or `in X days/hours` when `--min-release-age` is still
-waiting. Use `nvpm show` for full git ref comparison, update-resolution rationale,
+waiting. This works for **all providers** (`npm`, `pypi`, `github`, etc.):
+the first time `ls` surfaces a newer registry version,
+it records local first-seen so Available can show
+`4.11.0 in 7 days`.
+
+Use `nvpm show` for full git ref comparison, update-resolution rationale,
 and tag-overwrite alerts. JSON output (`--output json`) still includes
 `discovered_versions`, `eligible_versions`, and `eligible_soon_versions`.
 
@@ -355,6 +366,7 @@ also includes:
 - **Update resolution** - active policy and why a branch was chosen over a stale tag
 - **Discovery** - remote commit date vs when you first recorded the version locally
 - **Alerts** - force-moved tags/releases
+- **Always trust** - whether `extras.always_trust` skips `min-release-age` for the package
 
 ```sh
 nvpm show github:folke/ts-comments.nvim
@@ -370,6 +382,37 @@ nvpm up github:user/repo --update-resolution branches:main,develop;release-age-g
 
 Overrides are stored in `nvpm-lock.json` under `extras.update_resolution` (see
 `schemas/lock.schema.json`).
+
+`--always-trust` / `--no-always-trust` on `add` and `up` persistently skip (or clear)
+`min-release-age` for that package via lock `extras.always_trust`. Unlike `--force`
+(one-shot for the current command), `--always-trust` is stored and applied on later
+installs/updates until cleared.
+
+```sh
+nvpm add npm:eslint --always-trust
+nvpm up npm:eslint --no-always-trust
+```
+
+#### Filter DSL
+
+`--filter` is available on `ls`, `show`, `add`, `up`, and `rm`. Repeat the flag for
+AND semantics. Each value is `[.]path:value` against the package's `show` JSON fields
+(`name`, `package_id`, `categories`, `provider`, `always_trust`, `git_refs`, `status`, …).
+
+- Leading `.` is optional
+- Paths are dot-separated; arrays match if **any** element matches the remainder
+- The first `:` separates path from value (so `package_id:github:owner/repo` works)
+- Values are case-insensitive; `*` and `?` are globs (`*` matches any characters, including `/` and `:`); without wildcards, match is exact
+- Booleans: `always_trust:true` / `false`
+- Missing path → no match
+
+```sh
+nvpm ls --filter '.categories:*tree*'
+nvpm ls --filter 'package_id:github:mistweaverco*'
+nvpm show mistweaver --filter 'package_id:*mistweaverco/*'
+nvpm up --all --filter 'provider:npm'
+nvpm rm eslint --filter 'categories:LSP'
+```
 
 #### `nvpm up`
 

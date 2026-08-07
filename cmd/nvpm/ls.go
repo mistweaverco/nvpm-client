@@ -101,15 +101,19 @@ func init() {
 	lsCmd.Flags().String("only-providers", "", "Comma-separated provider names to include, e.g. pypi,npm")
 	lsCmd.Flags().String("only-categories", "", "Comma-separated category tokens; a package matches if any of its registry categories matches any token (substring match, case-insensitive), e.g. lsp,tree-sitter-parser")
 	lsCmd.Flags().Bool("only-plugins", false, "Show only Neovim plugins (lock entries with extras.kind neovim-plugin)")
+	lsCmd.Flags().Bool("only-always-trusted", false, "Show only packages with extras.always_trust in the lock file")
+	registerShowFilterFlag(lsCmd)
 }
 
 // ListQueryOptions holds positional name filters plus optional list constraints.
 type ListQueryOptions struct {
-	NameFilters    []string
-	OnlyOutdated   bool
-	OnlyProviders  []string // lowercase provider names (validated)
-	OnlyCategories []string // trimmed tokens from --only-categories
-	OnlyPlugins    bool     // lock entries with extras.kind neovim-plugin
+	NameFilters       []string
+	OnlyOutdated      bool
+	OnlyProviders     []string // lowercase provider names (validated)
+	OnlyCategories    []string // trimmed tokens from --only-categories
+	OnlyPlugins       bool     // lock entries with extras.kind neovim-plugin
+	OnlyAlwaysTrusted bool     // lock extras.always_trust
+	ShowFilters       []string // --filter path:value (AND, match show JSON)
 }
 
 func listQueryOptionsFromFlags(cmd *cobra.Command, args []string) (ListQueryOptions, error) {
@@ -124,6 +128,8 @@ func listQueryOptionsFromFlags(cmd *cobra.Command, args []string) (ListQueryOpti
 	onlyCat, _ := cmd.Flags().GetString("only-categories")
 	opts.OnlyCategories = parseCommaSeparatedList(onlyCat)
 	opts.OnlyPlugins, _ = cmd.Flags().GetBool("only-plugins")
+	opts.OnlyAlwaysTrusted, _ = cmd.Flags().GetBool("only-always-trusted")
+	opts.ShowFilters, _ = cmd.Flags().GetStringArray("filter")
 	return opts, nil
 }
 
@@ -195,7 +201,7 @@ func registryItemMatchesCategoryFilters(categories []string, filters []string) b
 }
 
 func (o ListQueryOptions) hasAdvancedFilters() bool {
-	return o.OnlyOutdated || len(o.OnlyProviders) > 0 || len(o.OnlyCategories) > 0 || o.OnlyPlugins
+	return o.OnlyOutdated || len(o.OnlyProviders) > 0 || len(o.OnlyCategories) > 0 || o.OnlyPlugins || o.OnlyAlwaysTrusted || len(o.ShowFilters) > 0
 }
 
 func (o ListQueryOptions) constraintDescriptionPlain() string {
@@ -215,6 +221,12 @@ func (o ListQueryOptions) constraintDescriptionPlain() string {
 	if o.OnlyPlugins {
 		parts = append(parts, "neovim plugins only")
 	}
+	if o.OnlyAlwaysTrusted {
+		parts = append(parts, "always-trusted only")
+	}
+	if len(o.ShowFilters) > 0 {
+		parts = append(parts, fmt.Sprintf("filters: %s", strings.Join(o.ShowFilters, ", ")))
+	}
 	return " - " + strings.Join(parts, "; ")
 }
 
@@ -232,6 +244,20 @@ func (o ListQueryOptions) constraintDescriptionMarkdown() string {
 	if len(o.OnlyCategories) > 0 {
 		parts = append(parts, fmt.Sprintf("categories: **%s**", strings.Join(o.OnlyCategories, ", ")))
 	}
+	if o.OnlyPlugins {
+		parts = append(parts, "neovim plugins only")
+	}
+	if o.OnlyAlwaysTrusted {
+		parts = append(parts, "always-trusted only")
+	}
+	if len(o.ShowFilters) > 0 {
+		// Backticks: filter values often contain '*' which would break **bold** markdown.
+		quoted := make([]string, 0, len(o.ShowFilters))
+		for _, f := range o.ShowFilters {
+			quoted = append(quoted, "`"+f+"`")
+		}
+		parts = append(parts, fmt.Sprintf("filters: %s", strings.Join(quoted, ", ")))
+	}
 	return " - " + strings.Join(parts, "; ")
 }
 
@@ -244,6 +270,15 @@ func appendListQueryJSONFields(m map[string]any, o ListQueryOptions) {
 	}
 	if len(o.OnlyCategories) > 0 {
 		m["only_categories"] = append([]string(nil), o.OnlyCategories...)
+	}
+	if o.OnlyPlugins {
+		m["only_plugins"] = true
+	}
+	if o.OnlyAlwaysTrusted {
+		m["only_always_trusted"] = true
+	}
+	if len(o.ShowFilters) > 0 {
+		m["filters_dsl"] = append([]string(nil), o.ShowFilters...)
 	}
 }
 
@@ -410,10 +445,20 @@ func formatEligibleGitRef(ref, commit string, remaining time.Duration) string {
 	if sha != "" {
 		base = fmt.Sprintf("%s (%s)", ref, sha)
 	}
-	if remaining > 0 {
-		return fmt.Sprintf("%s in %s", base, formatInDuration(remaining))
+	return formatEligibleVersion(base, remaining)
+}
+
+// formatEligibleVersion formats Eligible / EligibleSoon for non-git versions.
+// Eligible: "4.11.0"; soon: "4.11.0 in 7 days".
+func formatEligibleVersion(version string, remaining time.Duration) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return version
 	}
-	return base
+	if remaining > 0 {
+		return fmt.Sprintf("%s in %s", version, formatInDuration(remaining))
+	}
+	return version
 }
 
 func shortGitSHA(commit string) string {
@@ -642,32 +687,77 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 		return out
 	}
 
-	discovered, err := providers.ListDiscoveredVersions(sourceID)
-	if err != nil || len(discovered) == 0 {
-		return discoveryDisplay{Available: avail}
-	}
-
 	now := time.Now()
 	minAge := cfg.Flags.MinReleaseAge
-
 	out := discoveryDisplay{Available: avail}
-	for _, dv := range discovered {
-		version := dv.Version
-		if providers.IsGitCommitHash(version) {
-			version = dv.Version[:7]
-		}
-		// Always show what's been recorded, even if it's not newer than installed.
-		out.Discovered = append(out.Discovered, formatDiscoveredVersion(version, dv.FirstSeen, now))
+	eligibleSeen := map[string]struct{}{}
 
-		// Eligibility is only meaningful for versions newer than what's installed.
-		if shouldRecordDiscoveredVersion(installedVersion, dv.Version) {
-			age := now.Sub(dv.FirstSeen)
-			if minAge <= 0 || age >= minAge {
-				out.Eligible = append(out.Eligible, version)
+	// Registry candidates newer than installed: lazy-record first-seen (like git) and
+	// fill Eligible / EligibleSoon so Available can show "in X days" even when discovery.json
+	// was empty (warm registry cache).
+	candidates := make([]string, 0, 2)
+	if v := strings.TrimSpace(stable); v != "" && v != "latest" {
+		candidates = append(candidates, v)
+	}
+	if v := strings.TrimSpace(prerelease); v != "" && v != "latest" && v != strings.TrimSpace(stable) {
+		candidates = append(candidates, v)
+	}
+	for _, v := range candidates {
+		if !shouldRecordDiscoveredVersion(installedVersion, v) {
+			continue
+		}
+		firstSeen, found, err := providers.GetFirstSeen(sourceID, v)
+		if err != nil || !found {
+			_ = providers.RecordDiscoveryBatch([]providers.DiscoveryPair{{
+				SourceID: sourceID,
+				Version:  v,
+			}})
+			if t, seen, getErr := providers.GetFirstSeen(sourceID, v); getErr == nil && seen {
+				firstSeen = t
 			} else {
-				out.EligibleSoon = append(out.EligibleSoon, version)
+				firstSeen = now
 			}
 		}
+		displayVersion := v
+		if providers.IsGitCommitHash(displayVersion) {
+			displayVersion = displayVersion[:7]
+		}
+		age := now.Sub(firstSeen)
+		if minAge <= 0 || age >= minAge {
+			out.Eligible = append(out.Eligible, formatEligibleVersion(displayVersion, 0))
+		} else {
+			out.EligibleSoon = append(out.EligibleSoon, formatEligibleVersion(displayVersion, minAge-age))
+		}
+		eligibleSeen[v] = struct{}{}
+	}
+
+	discovered, err := providers.ListDiscoveredVersions(sourceID)
+	if err != nil {
+		return out
+	}
+	for _, dv := range discovered {
+		version := dv.Version
+		displayVersion := version
+		if providers.IsGitCommitHash(displayVersion) {
+			displayVersion = version[:7]
+		}
+		// Always show what's been recorded, even if it's not newer than installed.
+		out.Discovered = append(out.Discovered, formatDiscoveredVersion(displayVersion, dv.FirstSeen, now))
+
+		// Eligibility for versions already in discovery but not covered by registry candidates.
+		if !shouldRecordDiscoveredVersion(installedVersion, dv.Version) {
+			continue
+		}
+		if _, ok := eligibleSeen[dv.Version]; ok {
+			continue
+		}
+		age := now.Sub(dv.FirstSeen)
+		if minAge <= 0 || age >= minAge {
+			out.Eligible = append(out.Eligible, formatEligibleVersion(displayVersion, 0))
+		} else {
+			out.EligibleSoon = append(out.EligibleSoon, formatEligibleVersion(displayVersion, minAge-age))
+		}
+		eligibleSeen[dv.Version] = struct{}{}
 	}
 	return out
 }
@@ -929,6 +1019,16 @@ func (ls *ListService) applyAdvancedFiltersToInstalled(packages []local_packages
 		return packages
 	}
 	catByID := ls.registryCategoriesBySourceID()
+	var itemsByID map[string]registry_parser.RegistryItem
+	if len(opts.ShowFilters) > 0 {
+		itemsByID = make(map[string]registry_parser.RegistryItem)
+		for _, it := range ls.registry.GetData(false) {
+			id := strings.TrimSpace(it.Source.ID)
+			if id != "" {
+				itemsByID[id] = it
+			}
+		}
+	}
 	out := make([]local_packages_parser.LocalPackageItem, 0, len(packages))
 	for _, pkg := range packages {
 		prov := getProviderFromSourceID(pkg.SourceID)
@@ -948,6 +1048,20 @@ func (ls *ListService) applyAdvancedFiltersToInstalled(packages []local_packages
 		}
 		if opts.OnlyPlugins {
 			if pkg.Extras == nil || pkg.Extras.Kind != local_packages_parser.KindNeovimPlugin {
+				continue
+			}
+		}
+		if opts.OnlyAlwaysTrusted {
+			if pkg.Extras == nil || !pkg.Extras.AlwaysTrust {
+				continue
+			}
+		}
+		if len(opts.ShowFilters) > 0 {
+			if item, ok := itemsByID[pkg.SourceID]; ok {
+				if !MatchShowJSON(buildPackageInfoJSON(item, pkg.SourceID), opts.ShowFilters) {
+					continue
+				}
+			} else if !packageMatchesShowFilters(pkg.SourceID, opts.ShowFilters) {
 				continue
 			}
 		}
@@ -1362,6 +1476,21 @@ func (ls *ListService) applyAdvancedFiltersToRegistry(items []registry_parser.Re
 			if _, hasUpdate := ls.checkUpdateAvailability(id, installedVer, ""); !hasUpdate {
 				continue
 			}
+		}
+		if opts.OnlyAlwaysTrusted {
+			trusted := false
+			for _, pkg := range installedPackages {
+				if pkg.SourceID == id && pkg.Extras != nil && pkg.Extras.AlwaysTrust {
+					trusted = true
+					break
+				}
+			}
+			if !trusted {
+				continue
+			}
+		}
+		if len(opts.ShowFilters) > 0 && !registryItemMatchesShowFilters(item, opts.ShowFilters) {
+			continue
 		}
 		out = append(out, item)
 	}

@@ -39,6 +39,8 @@ type PackageExtras struct {
 	TreeSitterExternalQueries []TreeSitterExternalQueryPin `json:"treesitter_external_queries,omitempty"`
 	// UpdateResolution overrides global git update-resolution for this package.
 	UpdateResolution *LockUpdateResolution `json:"update_resolution,omitempty"`
+	// AlwaysTrust skips min-release-age for this package on add/up (persisted; unlike --force).
+	AlwaysTrust bool `json:"always_trust,omitempty"`
 }
 
 // LockUpdateResolution mirrors config git.update-resolution for lock file persistence.
@@ -553,6 +555,54 @@ func (lpp *LocalPackagesParser) MergePackageUpdateResolution(sourceID string, re
 	return nil
 }
 
+// MergePackageAlwaysTrust sets or clears extras.always_trust for an installed package.
+func (lpp *LocalPackagesParser) MergePackageAlwaysTrust(sourceID string, trust bool) error {
+	sourceID = normalizePackageID(sourceID)
+	if sourceID == "" {
+		return nil
+	}
+	root := lpp.GetData(false)
+	for i := range root.Packages {
+		if root.Packages[i].SourceID != sourceID {
+			continue
+		}
+		if trust {
+			if root.Packages[i].Extras == nil {
+				root.Packages[i].Extras = &PackageExtras{}
+			}
+			root.Packages[i].Extras.AlwaysTrust = true
+		} else if root.Packages[i].Extras != nil {
+			root.Packages[i].Extras.AlwaysTrust = false
+			if packageExtrasEmpty(root.Packages[i].Extras) {
+				root.Packages[i].Extras = nil
+			}
+		} else {
+			return nil
+		}
+		root.Schema = lockSchemaURL
+		localPackagesFile := lpp.fileManager.GetAppLocalPackagesFilePath()
+		jsonData, err := marshalIndent(root, "", "  ")
+		if err != nil {
+			return err
+		}
+		return lpp.fileManager.WriteFile(localPackagesFile, jsonData, 0644)
+	}
+	return nil
+}
+
+func packageExtrasEmpty(e *PackageExtras) bool {
+	if e == nil {
+		return true
+	}
+	return e.Kind == "" &&
+		len(e.Integrations) == 0 &&
+		len(e.TreeSitterParserChoices) == 0 &&
+		len(e.TreeSitterQueryChoices) == 0 &&
+		len(e.TreeSitterExternalQueries) == 0 &&
+		e.UpdateResolution == nil &&
+		!e.AlwaysTrust
+}
+
 func (lpp *LocalPackagesParser) IsNeovimPlugin(sourceID string) bool {
 	item := lpp.GetBySourceId(sourceID)
 	return item.Extras != nil && item.Extras.Kind == KindNeovimPlugin
@@ -708,6 +758,10 @@ func MergePackageKind(sourceId, kind string) error {
 
 func MergePackageUpdateResolution(sourceId string, resolution *LockUpdateResolution) error {
 	return globalParser.MergePackageUpdateResolution(sourceId, resolution)
+}
+
+func MergePackageAlwaysTrust(sourceId string, trust bool) error {
+	return globalParser.MergePackageAlwaysTrust(sourceId, trust)
 }
 
 func IsNeovimPlugin(sourceId string) bool {

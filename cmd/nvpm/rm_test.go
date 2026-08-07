@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -22,6 +23,40 @@ func TestRemoveCommand(t *testing.T) {
 	t.Run("remove command has no subcommands", func(t *testing.T) {
 		assert.Empty(t, rmCmd.Commands())
 	})
+
+	t.Run("rm has filter flag", func(t *testing.T) {
+		assert.NotNil(t, rmCmd.Flags().Lookup("filter"))
+	})
+}
+
+func TestRemoveCommandFiltersSelection(t *testing.T) {
+	prevSupp := isSupportedProviderFn
+	prevRemove := removePackageFn
+	prevRegistry := newRegistryParser
+	isSupportedProviderFn = func(p string) bool { return true }
+	removed := []string{}
+	removePackageFn = func(id string) bool {
+		removed = append(removed, id)
+		return true
+	}
+	newRegistryParser = func() *registry_parser.RegistryParser {
+		return registry_parser.NewRegistryParser(emptyRegistryFileReader{})
+	}
+	defer func() {
+		isSupportedProviderFn = prevSupp
+		removePackageFn = prevRemove
+		newRegistryParser = prevRegistry
+		if sa, ok := rmCmd.Flags().Lookup("filter").Value.(interface{ Replace([]string) error }); ok {
+			_ = sa.Replace(nil)
+		}
+	}()
+
+	_ = rmCmd.Flags().Set("filter", "provider:npm")
+	out := captureOutput(t, func() {
+		rmCmd.Run(rmCmd, []string{"npm:eslint", "pypi:black"})
+	})
+	assert.Contains(t, out, "Removing 1 package")
+	assert.Equal(t, []string{"npm:eslint"}, removed)
 }
 
 func TestRemoveCommandRunPaths(t *testing.T) {

@@ -145,6 +145,12 @@ Examples:
 	// Enable shell completion for installed package IDs only.
 	ValidArgsFunction: installedPackageIDCompletion,
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := validateAlwaysTrustFlags(); err != nil {
+			service := newUpdateService()
+			service.output.Printf("%s %v\n", IconClose(), err)
+			osExit(1)
+			return
+		}
 		forceFlag, _ := cmd.Flags().GetBool("force")
 		providers.SetMinReleaseAgePolicy(providers.MinReleaseAgePolicy{
 			MinAge: cfg.Flags.MinReleaseAge,
@@ -168,7 +174,7 @@ Examples:
 			service := newUpdateService()
 			service.output.Println("Updating all installed packages to latest versions...")
 
-			success := service.UpdateAllPackages()
+			success := service.UpdateAllPackages(getShowFilters(cmd))
 
 			if success {
 				service.output.Println("Successfully updated all packages")
@@ -244,6 +250,26 @@ Examples:
 			displayIDs = append(displayIDs, displayID)
 		}
 
+		filters := getShowFilters(cmd)
+		if len(filters) > 0 {
+			filteredInternal := make([]string, 0, len(internalIDs))
+			filteredDisplay := make([]string, 0, len(displayIDs))
+			for i, id := range internalIDs {
+				if packageMatchesShowFilters(id, filters) {
+					filteredInternal = append(filteredInternal, id)
+					filteredDisplay = append(filteredDisplay, displayIDs[i])
+				}
+			}
+			internalIDs = filteredInternal
+			displayIDs = filteredDisplay
+		}
+
+		if len(internalIDs) == 0 {
+			service := newUpdateService()
+			service.output.Println("No packages match the current --filter criteria")
+			return
+		}
+
 		// Update individual packages
 		service := newUpdateService()
 		service.output.Printf("Updating %d package(s) to latest versions...\n", len(internalIDs))
@@ -262,6 +288,7 @@ Examples:
 				allSuccess = false
 				continue
 			}
+			applyPendingAlwaysTrust(internalID)
 
 			// Update the package with spinner showing package name
 			var success bool
@@ -275,6 +302,7 @@ Examples:
 				failedCount++
 				allSuccess = false
 				clearPendingUpdateResolution(internalID)
+				clearPendingAlwaysTrust(internalID)
 				continue
 			}
 
@@ -282,6 +310,7 @@ Examples:
 				service.output.Printf("%s Successfully updated %s\n", IconCheck(), displayID)
 				successCount++
 				persistUpdateResolutionAfterInstall(internalID)
+				persistAlwaysTrustAfterInstall(internalID)
 			} else {
 				service.output.Printf("%s Failed to update %s\n", IconClose(), displayID)
 				if detail := strings.TrimSpace(providers.TakeLastError()); detail != "" {
@@ -290,6 +319,7 @@ Examples:
 				failedCount++
 				allSuccess = false
 				clearPendingUpdateResolution(internalID)
+				clearPendingAlwaysTrust(internalID)
 			}
 		}
 
@@ -310,7 +340,10 @@ func init() {
 	upCmd.Flags().BoolP("all", "A", false, "Update all installed packages to their latest versions")
 	upCmd.Flags().Bool("self", false, "Update nvpm itself to the latest version")
 	upCmd.Flags().Bool("force", false, "bypass min-release-age safety checks")
+	upCmd.Flags().BoolVar(&installAlwaysTrust, "always-trust", false, "persistently skip min-release-age for this package (stored in lock extras.always_trust)")
+	upCmd.Flags().BoolVar(&installNoAlwaysTrust, "no-always-trust", false, "clear extras.always_trust for this package")
 	upCmd.Flags().StringVar(&installUpdateResolution, "update-resolution", "", "git-only: override update-resolution when updating (e.g. always, release-age-gap:30d)")
+	registerShowFilterFlag(upCmd)
 }
 
 // newUpdateService is a factory to allow test injection
@@ -319,7 +352,11 @@ var newUpdateService = NewUpdateService
 // UpdateAllPackages updates all installed packages to their latest versions
 // Only updates packages that have updates available according to the registry data
 // (or cached remote_latest for non-registry git packages).
-func (us *UpdateService) UpdateAllPackages() bool {
+func (us *UpdateService) UpdateAllPackages(showFilters ...[]string) bool {
+	var filters []string
+	if len(showFilters) > 0 {
+		filters = showFilters[0]
+	}
 	// Refresh registry and discover non-registry git remotes when the snapshot was rebuilt.
 	refreshed, _ := downloadAndUnzipRegistryFn()
 	us.registry.GetData(refreshed)
@@ -345,6 +382,10 @@ func (us *UpdateService) UpdateAllPackages() bool {
 	skippedCount := 0
 
 	for _, pkg := range localPackages {
+		if len(filters) > 0 && !packageMatchesShowFilters(pkg.SourceID, filters) {
+			skippedCount++
+			continue
+		}
 		hasUpdate := us.checkUpdateAvailability(pkg.SourceID, pkg.Version, pkg.Commit)
 		if hasUpdate {
 			packagesToUpdate = append(packagesToUpdate, pkg)
@@ -365,6 +406,14 @@ func (us *UpdateService) UpdateAllPackages() bool {
 	failedCount := 0
 
 	for _, pkg := range packagesToUpdate {
+		if err := applyPendingUpdateResolution(pkg.SourceID); err != nil {
+			us.output.Printf("%s Invalid --update-resolution: %v\n", IconClose(), err)
+			failedCount++
+			allSuccess = false
+			continue
+		}
+		applyPendingAlwaysTrust(pkg.SourceID)
+
 		// Update the package with spinner showing package name
 		var success bool
 		action := func() {
@@ -376,12 +425,16 @@ func (us *UpdateService) UpdateAllPackages() bool {
 			us.output.Printf("%s Failed to update %s: %v\n", IconClose(), pkg.SourceID, err)
 			failedCount++
 			allSuccess = false
+			clearPendingUpdateResolution(pkg.SourceID)
+			clearPendingAlwaysTrust(pkg.SourceID)
 			continue
 		}
 
 		if success {
 			successCount++
 			us.output.Printf("%s Successfully updated %s\n", IconCheck(), pkg.SourceID)
+			persistUpdateResolutionAfterInstall(pkg.SourceID)
+			persistAlwaysTrustAfterInstall(pkg.SourceID)
 		} else {
 			failedCount++
 			us.output.Printf("%s Failed to update %s\n", IconClose(), pkg.SourceID)
@@ -389,6 +442,8 @@ func (us *UpdateService) UpdateAllPackages() bool {
 				us.output.Printf("  %s\n", detail)
 			}
 			allSuccess = false
+			clearPendingUpdateResolution(pkg.SourceID)
+			clearPendingAlwaysTrust(pkg.SourceID)
 		}
 	}
 

@@ -95,6 +95,25 @@ Examples:
 			displayIDs = append(displayIDs, displayID)
 		}
 
+		filters := getShowFilters(cmd)
+		if len(filters) > 0 {
+			filteredInternal := make([]string, 0, len(internalIDs))
+			filteredDisplay := make([]string, 0, len(displayIDs))
+			for i, id := range internalIDs {
+				if packageMatchesShowFilters(id, filters) {
+					filteredInternal = append(filteredInternal, id)
+					filteredDisplay = append(filteredDisplay, displayIDs[i])
+				}
+			}
+			internalIDs = filteredInternal
+			displayIDs = filteredDisplay
+		}
+
+		if len(internalIDs) == 0 {
+			fmt.Println("No packages match the current --filter criteria")
+			return
+		}
+
 		// Remove all packages
 		fmt.Printf("Removing %d package(s)...\n", len(internalIDs))
 
@@ -175,6 +194,7 @@ var removeIntegrations []string
 
 func init() {
 	rmCmd.Flags().StringSliceVar(&removeIntegrations, "integrate", nil, "run integration backends cleanup when removing (e.g. --integrate neovim)")
+	registerShowFilterFlag(rmCmd)
 }
 
 // findInstalledPackagesByName searches installed packages for packages matching the given name

@@ -119,6 +119,8 @@ Examples:
 			}
 		}
 
+		packagesToShow = filterSourceIDsByShowFilters(packagesToShow, getShowFilters(cmd))
+
 		// Display info for each package
 		if ShouldUseJSONOutput() {
 			// Collect all packages for JSON output
@@ -237,6 +239,9 @@ func displayPackageInfoRich(item registry_parser.RegistryItem, sourceID string) 
 		} else {
 			markdown.WriteString("**Status:** ✅ Installed\n\n")
 		}
+		if packageAlwaysTrustFromLock(sourceID) {
+			markdown.WriteString("**Always trust:** yes (min-release-age skipped)\n\n")
+		}
 	} else {
 		markdown.WriteString("**Status:** ⬜ Not installed\n\n")
 	}
@@ -329,6 +334,9 @@ func displayPackageInfoPlain(item registry_parser.RegistryItem, sourceID string)
 		} else {
 			fmt.Printf("Status: Installed\n")
 		}
+		if packageAlwaysTrustFromLock(sourceID) {
+			fmt.Printf("Always trust: yes (min-release-age skipped)\n")
+		}
 	} else {
 		fmt.Printf("Status: Not installed\n")
 	}
@@ -416,6 +424,9 @@ func buildPackageInfoJSON(item registry_parser.RegistryItem, sourceID string) ma
 		if installedVersion != "" {
 			result["installed_version"] = installedVersion
 		}
+		if packageAlwaysTrustFromLock(sourceID) {
+			result["always_trust"] = true
+		}
 	}
 	result["status"] = status
 
@@ -427,4 +438,18 @@ func buildPackageInfoJSON(item registry_parser.RegistryItem, sourceID string) ma
 	mergeGitDetailsJSON(result, collectPackageGitDetails(item, sourceID))
 
 	return result
+}
+
+func packageAlwaysTrustFromLock(sourceID string) bool {
+	localPackagesRoot := newLocalPackagesParserFn()
+	for _, pkg := range localPackagesRoot.Packages {
+		if pkg.SourceID == sourceID {
+			return pkg.Extras != nil && pkg.Extras.AlwaysTrust
+		}
+	}
+	return false
+}
+
+func init() {
+	registerShowFilterFlag(infoCmd)
 }

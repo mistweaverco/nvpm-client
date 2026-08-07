@@ -278,6 +278,9 @@ func TestDiscoveryDisplayPreferBranchSupersededTag(t *testing.T) {
 	providers.SetDiscoveryWritesEnabled(true)
 	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
 
+	cfg.Flags.MinReleaseAge = 0
+	t.Cleanup(func() { cfg.Flags.MinReleaseAge = 7 * 24 * time.Hour })
+
 	now := time.Now()
 	tagUnix := now.Add(-290 * 24 * time.Hour).Unix()
 	require.NoError(t, providers.SetRemoteLatest("github:o/manual", providers.RemoteLatestEntry{
@@ -376,4 +379,61 @@ func TestDiscoveryDisplayPreferBranchEligibleSoon(t *testing.T) {
 	assert.Empty(t, disc.Eligible)
 	require.Len(t, disc.EligibleSoon, 1)
 	assert.Equal(t, "main (322c79d in 7 days)", disc.EligibleSoon[0])
+}
+
+func TestDiscoveryDisplayRegistryVersionIgnoredWhenRemoteLatestPreferBranch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NVPM_HOME", home)
+	_ = files.GetAppDataPath()
+
+	providers.SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
+
+	cfg.Flags.MinReleaseAge = 7 * 24 * time.Hour
+	t.Cleanup(func() { cfg.Flags.MinReleaseAge = 0 })
+
+	commit := "cba53eff1948109ec0f47cbead4f07494d1e25c9"
+	require.NoError(t, providers.SetRemoteLatest("github:saghen/blink.cmp", providers.RemoteLatestEntry{
+		Version:          "main",
+		Commit:           commit,
+		SupersededTag:    "v1.10.2",
+		SupersededCommit: "78336bc89ee5365633bcf754d93df01678b5c08f",
+		SupersededUnix:   time.Now().Add(-124 * 24 * time.Hour).Unix(),
+	}))
+	require.NoError(t, providers.RecordDiscoveryBatch([]providers.DiscoveryPair{{
+		SourceID: "github:saghen/blink.cmp",
+		Version:  "main",
+		Commit:   commit,
+	}}))
+	require.NoError(t, providers.RecordDiscoveryBatch([]providers.DiscoveryPair{{
+		SourceID: "github:saghen/blink.cmp",
+		Version:  "v1.10.2",
+		Commit:   "78336bc89ee5365633bcf754d93df01678b5c08f",
+	}}))
+
+	svc := NewListServiceWithDependencies(
+		&MockLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(sourceID string) (string, string) {
+				assert.Equal(t, "github:saghen/blink.cmp", sourceID)
+				return "v1.10.2", ""
+			},
+			GetDataFunc: func(bool) []registry_parser.RegistryItem {
+				return []registry_parser.RegistryItem{{
+					Source:  registry_parser.RegistryItemSource{ID: "github:saghen/blink.cmp"},
+					Version: "v1.10.2",
+				}}
+			},
+		},
+		&MockUpdateChecker{},
+		&MockFileDownloader{},
+	)
+
+	disc := svc.discoveryDisplayForInstalled("github:saghen/blink.cmp", "main", commit)
+	assert.Empty(t, disc.Eligible)
+	assert.Empty(t, disc.EligibleSoon)
+	assert.Empty(t, mergedAvailableColumn(disc))
+
+	_, hasUpdate := svc.checkUpdateAvailability("github:saghen/blink.cmp", "main", commit)
+	assert.False(t, hasUpdate)
 }

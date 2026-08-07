@@ -257,6 +257,7 @@ func displayPackageInfoRich(item registry_parser.RegistryItem, sourceID string) 
 	if extra.TreeSitter != nil {
 		appendTreeSitterMarkdown(&markdown, extra.TreeSitter)
 	}
+	appendGitDetailsMarkdown(&markdown, collectPackageGitDetails(item, sourceID))
 
 	// Render markdown with glamour
 	rendered, err := glamour.Render(markdown.String(), "dark")
@@ -350,6 +351,9 @@ func displayPackageInfoPlain(item registry_parser.RegistryItem, sourceID string)
 		appendTreeSitterPlain(&b, extra.TreeSitter)
 		fmt.Print(b.String())
 	}
+	var gitB strings.Builder
+	appendGitDetailsPlain(&gitB, collectPackageGitDetails(item, sourceID))
+	fmt.Print(gitB.String())
 }
 
 // buildPackageInfoJSON builds a JSON representation of package info
@@ -420,6 +424,7 @@ func buildPackageInfoJSON(item registry_parser.RegistryItem, sourceID string) ma
 	}
 
 	mergeExtraDetailsJSON(result, collectPackageExtraDetails(item))
+	mergeGitDetailsJSON(result, collectPackageGitDetails(item, sourceID))
 
 	return result
 }

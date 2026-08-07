@@ -1,8 +1,8 @@
 <div align="center">
 
-![NVPM logo][logo]
+![`nvpm` logo][logo]
 
-# nvpm-client
+# `nvpm` CLI
 
 [![Made with love][badge-made-with-love]][contributors]
 [![Go][badge-golang]][golang-website]
@@ -21,34 +21,34 @@
 
 <p></p>
 
-NVPM 🌈 aims to be an editor-agnostic 🫶 package manager 📦 for
-Tree-sitter parsers, LSP servers, DAP servers,
-linters and formatters and more.
+`nvpm` 🌈 aims to be an editor-agnostic 🫶 package manager 📦 for
+Tree-sitter parsers, `LSP` servers, `DAP` servers,
+linters, and formatters and more.
 
 <p></p>
 
 </div>
 
-## Terms used
+## Terms Used
 
 - *Tree-sitter*: A parser generator tool and an incremental parsing library.
 - *Language Server Protocol* (LSP): A protocol that defines
-  how code editors and IDEs communicate with language servers.
-- *Debug Adapter Protocol* (DAP): A protocol that defines
-  how code editors and IDEs communicate with debuggers.
-- *Package*: A package is a LSP server, DAP server, formatter
-  or linter that can be installed via NVPM.
+  how to communicate with language servers.
+- *Debug Adapter Protocol* (`DAP`): A protocol that defines
+  how to communicate with debuggers.
+- *Package*: A package is a `LSP` server, `DAP` server, formatter,
+  or linter that can be installed via `nvpm`.
 - *Provider*: A provider is a package source,
     e.g., `npm`, `pypi`, `golang`, etc.
 - *Package ID*: A package ID is a unique identifier for a package,
     e.g., `npm:@mistweavercokulala-ls@0.1.0`.
-- *NVPM Registry*: The NVPM Registry is a registry of
-    available packages that can be installed via NVPM.
+- *`nvpm` Registry*: The `nvpm` Registry is a registry of
+    available packages that can be installed via `nvpm`.
 - *Terminal User Interface* (TUI): A text-based user interface
   that runs in a terminal emulator.
 
 > [!NOTE]
-> The nvpm client defaults to the [NVPM Registry][nvpm-registry] to
+> The `nvpm` CLI defaults to the [`nvpm` Registry][nvpm-registry] to
 > install and manage packages.
 > This can be configured to use other registries as well.
 > The client then merges all registries together and
@@ -56,7 +56,7 @@ linters and formatters and more.
 
 ## Requirements
 
-NVPM is a CLI, therefore you need to have a terminal emulator available.
+`nvpm` is a CLI, therefore you need to have a terminal emulator available.
 
 Besides that, we shell out a lot to install packages.
 
@@ -64,7 +64,7 @@ E.g. if you want to install `npm` packages,
 you need to have `npm` installed.
 
 For the packages to work in Neovim, you either need to
-[nvpm.nvim] installed,
+[`nvpm.nvim`] installed,
 or source the environment setup in your shell.
 
 ```sh
@@ -74,18 +74,18 @@ source <(nvpm env)
 ## Install
 
 Just head over to the [download page][download-website] or
-grab it directtly from the [releases][latest-release].
+grab it directly from the [releases][latest-release].
 
 ## Usage
 
-The heart of NVPM is its `nvpm-lock.json` file.
+The heart of `nvpm` is its `nvpm-lock.json` file.
 This file is used to keep track of the installed packages and their versions.
 
-You can tell NVPM where to find the `nvpm-lock.json` (and optional `config.yaml`)
+You can tell `nvpm` where to find the `nvpm-lock.json` (and optional `config.yaml`)
 by setting the environment variable `NVPM_HOME`.
 
 If `NVPM_HOME` isn't set,
-NVPM will look for the `nvpm-lock.json` file in the default locations:
+`nvpm` will look for the `nvpm-lock.json` file in the default locations:
 
 - Linux: `$XDG_CONFIG_HOME/nvpm/nvpm-lock.json` or
   `$HOME/.config/nvpm/nvpm-lock.json`
@@ -93,10 +93,10 @@ NVPM will look for the `nvpm-lock.json` file in the default locations:
 - Windows: `%APPDATA%\nvpm\nvpm-lock.json`
 
 If the file doesn't exist,
-NVPM will create it for you (when you install a package).
+`nvpm` will create it for you (when you install a package).
 
-NVPM's cache directory is controlled separately via `NVPM_CACHE`.
-If `NVPM_CACHE` isn't set, NVPM uses OS defaults:
+The cache directory of `nvpm` is controlled separately via `NVPM_CACHE`.
+If `NVPM_CACHE` isn't set, `nvpm` uses `OS` defaults:
 
 ```
 - Linux: `~/.cache/nvpm`
@@ -108,7 +108,7 @@ It's advised to keep the `nvpm-lock.json` file in version control.
 
 ### Debugging
 
-Set `NVPM_DEBUG` to increase log verbosity on stderr:
+Set `NVPM_DEBUG` to increase log verbosity on `stderr`:
 
 | Value | Level |
 |-------|-------|
@@ -118,22 +118,22 @@ Set `NVPM_DEBUG` to increase log verbosity on stderr:
 | unset / `error` / `0` / `false` | Errors only (default) |
 
 With `NVPM_DEBUG=debug` (or `info`), install/update spinners are disabled so log lines stay readable.
-Failed installs also print the underlying provider error under the failure line (e.g. `go install` stderr).
+Failed installs also print the underlying provider error under the failure line (e.g. `go install stderr`).
 
 Example:
 
 ```sh
-NVPM_DEBUG=debug nvpm add golang:golang.org/x/tools/gopls
+`nvpm`_DEBUG=debug nvpm add golang:golang.org/x/tools/gopls
 ```
 
 Optionally set `NVPM_LOG_FORMAT=json` for machine-readable logs.
 
-### Modify environment path
+### Modify Environment Path
 
 If you want the installed packages to be available in your path,
 you can add the following to your shell configuration file:
 
-#### bash environment setup
+#### `bash` Environment Setup
 
 add to `~/.bashrc`:
 
@@ -141,7 +141,7 @@ add to `~/.bashrc`:
 source <(nvpm env)
 ```
 
-#### zsh environment setup
+#### `zsh` Environment Setup
 
 add to `~/.zshrc`:
 
@@ -149,14 +149,14 @@ add to `~/.zshrc`:
 source <(nvpm env zsh)
 ```
 
-or with [evalcache](https://github.com/mroth/evalcache) for zsh,
+or with [`evalcache`](https://github.com/mroth/evalcache) for `zsh`,
 add to `~/.zshrc`:
 
 ```sh
 _evalcache nvpm env zsh
 ```
 
-#### fish environment setup
+#### `fish` Environment Setup
 
 add to `~/.config/fish/config.fish`:
 
@@ -164,7 +164,7 @@ add to `~/.config/fish/config.fish`:
 nvpm env fish | source
 ```
 
-#### PowerShell environment setup
+#### `PowerShell` Environment Setup
 
 add to `profile`:
 
@@ -172,12 +172,12 @@ add to `profile`:
 nvpm env powershell | Invoke-Expression
 ```
 
-### CLI autocompletion
+### CLI Autocompletion
 
 If you want autocompletion for the CLI commands,
 you can add the following to your shell configuration file:
 
-#### bash autocompletion setup
+#### `bash` Autocompletion Setup
 
 add to `~/.bashrc`:
 
@@ -185,7 +185,7 @@ add to `~/.bashrc`:
 source <(nvpm completion bash)
 ```
 
-#### zsh autocompletion setup
+#### `zsh` Autocompletion Setup
 
 add to `~/.zshrc`:
 
@@ -193,7 +193,7 @@ add to `~/.zshrc`:
 source <(nvpm completion zsh)
 ```
 
-#### fish autocompletion setup
+#### `fish` Autocompletion Setup
 
 generate the completion script once:
 
@@ -203,7 +203,7 @@ nvpm completion fish > ~/.config/fish/completions/nvpm.fish
 
 Fish loads completions from that directory automatically.
 
-#### powershell autocompletion setup
+#### `PowerShell` Autocompletion Setup
 
 add to `profile`:
 
@@ -215,7 +215,7 @@ nvpm completion powershell | Invoke-Expression
 
 You can run `nvpm --help` to see the available CLI options.
 
-#### nvpm show
+#### `nvpm show`
 
 `show/info/details` shows information about one or more packages.
 
@@ -226,7 +226,7 @@ nvpm show \
   golang:golangci-lint
 ```
 
-#### nvpm add
+#### `nvpm add`
 
 `add`/`install` add packages
 
@@ -237,7 +237,7 @@ nvpm add \
   golang:golangci-lint
 ```
 
-#### nvpm sync
+#### `nvpm sync`
 
 `sync` syncs the installed packages or registry data.
 
@@ -251,7 +251,7 @@ nvpm sync packages
 
 For registry data,
 it'll update the local registry cache
-with the latest data from the NVPM Registry.
+with the latest data from the `nvpm` Registry.
 
 ```sh
 nvpm sync registry
@@ -264,7 +264,7 @@ You can control how long `nvpm` considers the downloaded registry zip "fresh":
 
 - via `config.yaml` (recommended)
 
-The optional `config.yaml` lives next to `nvpm-lock.json` in your NVPM config dir
+The optional `config.yaml` lives next to `nvpm-lock.json` in your `nvpm` configuration directory
 (usually `~/.config/nvpm/config.yaml`, or `$NVPM_HOME/config.yaml`).
 
 Example:
@@ -295,12 +295,12 @@ ui:
 `git.update-resolution.prefers-branch-over-release` controls when **non-registry**
 git-hosted packages use a branch tip instead of a stale tag/release as “latest”.
 Registry packages keep the curated registry version. The default (even without
-a config file) is `release-age-gap` with `gap: 60d` and branches `main`, `master`.
+a configuration file) is `release-age-gap` with `gap: 60d` and branches `main`, `master`.
 Use `kind: always` to ignore tags/releases entirely for those non-registry packages.
 
 A JSON Schema is provided at `schemas/config.schema.json`.
 
-#### nvpm ls
+#### `nvpm ls`
 
 `ls`/`list` list all installed packages.
 
@@ -339,7 +339,39 @@ nvpm ls --only-providers pypi --only-categories lsp
 nvpm ls -A --only-providers npm --only-outdated
 ```
 
-#### nvpm up
+Installed list output uses three columns: **Package ID**, **Installed**, and **Available**.
+The Available column shows install candidates (tags, branches, or `semver` versions) that
+have passed local discovery, or `in X days/hours` when `--min-release-age` is still
+waiting. Use `nvpm show` for full git ref comparison, update-resolution rationale,
+and tag-overwrite alerts. JSON output (`--output json`) still includes
+`discovered_versions`, `eligible_versions`, and `eligible_soon_versions`.
+
+#### `nvpm show`
+
+`show` (alias of `info`) prints detailed registry metadata. For git-hosted packages it
+also includes:
+
+- **Remote refs** - branch/tag tips with upstream commit age (from registry metadata)
+- **Update resolution** - active policy and why a branch was chosen over a stale tag
+- **Discovery** - remote commit date vs when you first recorded the version locally
+- **Alerts** - force-moved tags/releases
+
+```sh
+nvpm show github:folke/ts-comments.nvim
+```
+
+Per-package git update policy can be overridden on install/update:
+
+```sh
+nvpm add github:user/repo --update-resolution release-age-gap:30d
+nvpm add github:user/repo --update-resolution always
+nvpm up github:user/repo --update-resolution branches:main,develop;release-age-gap:60d
+```
+
+Overrides are stored in `nvpm-lock.json` under `extras.update_resolution` (see
+`schemas/lock.schema.json`).
+
+#### `nvpm up`
 
 `up`/`update` updates packages.
 
@@ -363,13 +395,13 @@ prefix of either the package id or name.
 nvpm up -A yaml
 ```
 
-NVPM can also update itself with:
+`nvpm` can also update itself with:
 
 ```sh
 nvpm up --self
 ```
 
-#### nvpm rm
+#### `nvpm rm`
 
 `rm`/`remove` removes packages.
 
@@ -387,7 +419,7 @@ prefix of either the package id or name.
 nvpm rm -A yaml
 ```
 
-#### nvpm health
+#### `nvpm health`
 
 - `health` checks for requirements
 (for shelling out to install packages)
@@ -396,11 +428,11 @@ nvpm rm -A yaml
 nvpm health
 ```
 
-### Where are the packages?
+### Where Are the Packages?
 
-NVPM uses a basepath to install packages of different types.
+`nvpm` uses a base path to install packages of different types.
 
-The basepath is:
+The base path is:
 
 - Linux: `$XDG_DATA_HOME/nvpm/packages` or `$HOME/.local/share/nvpm/packages`
 - macOS: `$HOME/Library/Application Support/nvpm/packages`
@@ -412,7 +444,7 @@ The packages are installed in the following directory structure:
 $basepath/$provider/$package-name/
 ```
 
-### Tree-sitter parsers for Neovim
+### Tree-Sitter Parsers for Neovim
 
 Parsers are written to Neovim's data directory under:
 
@@ -420,10 +452,10 @@ Parsers are written to Neovim's data directory under:
 <stdpath("data")>/site/parser/<language>.<so|dylib|dll>
 ```
 
-NVPM builds parsers from upstream source using the `tree-sitter` CLI when a
+`nvpm` builds parsers from upstream source using the `tree-sitter` CLI when a
 registry package declares `treesitter.build`.
 
-By default, NVPM only builds and caches the parser artifacts under:
+By default, `nvpm` only builds and caches the parser artifacts under:
 
 ```
 <nvpm-data-share>/artifacts/treesitter/<package>/<version>/<language>.<so|dylib|dll>
@@ -435,7 +467,7 @@ To install built parsers into Neovim, use:
 nvpm add --integrate neovim <package>
 ```
 
-NVPM resolves `<stdpath("data")>` by running Neovim headless when available
+`nvpm` resolves `<stdpath("data")>` by running Neovim headless when available
 (`nvim --headless ...`). If `nvim` is not available, it falls back to common
 defaults:
 
@@ -443,14 +475,10 @@ defaults:
 - macOS: `~/Library/Application Support/nvim`
 - Windows: `%LOCALAPPDATA%\\nvim-data`
 
-### Neovim plugins (nvpm.nvim)
+### Neovim Plugins (`nvpm.nvim`)
 
 Registry packages with category `Plugin` or `editor_integration: neovim` install under:
-
-```
-<nvpm-data-share>/plugins/<provider>/<owner_repo>/
-```
-
+`<nvpm-data-share>/plugins/<provider>/<owner_repo>/`
 and are recorded in `nvpm-lock.json` with `extras.kind: "neovim-plugin"`.
 
 ```sh
@@ -459,9 +487,9 @@ nvpm add --plugin neovim github:owner/custom.nvim  # force Neovim plugin install
 nvpm ls --only-plugins
 ```
 
-Runtime loading uses [nvpm.nvim](https://github.com/mistweaverco/nvpm.nvim) with lazy.nvim-compatible specs.
+Runtime loading uses [`nvpm.nvim`](https://github.com/mistweaverco/nvpm.nvim) with `lazy.nvim`-compatible specs.
 
-## Supported providers
+## Supported Providers
 
 - `cargo`
 - `codeberg`
@@ -482,19 +510,19 @@ Runtime loading uses [nvpm.nvim](https://github.com/mistweaverco/nvpm.nvim) with
 
 <div align="center">
 
-### List installed packges demo
+### List Installed Packages Demo
 
 ![list installed packages demo](https://nvpm.dev/assets/tapes/cli/list/installed.gif)
 
-### List installed and outdated packges demo
+### List Installed and Outdated Packages Demo
 
 ![list installed and outdated packages demo](https://nvpm.dev/assets/tapes/cli/list/installed-outdated.gif)
 
-### List all packges demo
+### List All Packages Demo
 
 ![list all packages demo](https://nvpm.dev/assets/tapes/cli/list/all.gif)
 
-### Add packages demo
+### Add Packages Demo
 
 ![add packages demo](https://nvpm.dev/assets/tapes/cli/add/integrate-neovim.gif)
 

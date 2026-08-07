@@ -256,6 +256,13 @@ Examples:
 			internalID := internalIDs[idx]
 			displayID := displayIDs[idx]
 
+			if err := applyPendingUpdateResolution(internalID); err != nil {
+				service.output.Printf("%s Invalid --update-resolution: %v\n", IconClose(), err)
+				failedCount++
+				allSuccess = false
+				continue
+			}
+
 			// Update the package with spinner showing package name
 			var success bool
 			action := func() {
@@ -267,12 +274,14 @@ Examples:
 				service.output.Printf("%s Failed to update %s: %v\n", IconClose(), displayID, err)
 				failedCount++
 				allSuccess = false
+				clearPendingUpdateResolution(internalID)
 				continue
 			}
 
 			if success {
 				service.output.Printf("%s Successfully updated %s\n", IconCheck(), displayID)
 				successCount++
+				persistUpdateResolutionAfterInstall(internalID)
 			} else {
 				service.output.Printf("%s Failed to update %s\n", IconClose(), displayID)
 				if detail := strings.TrimSpace(providers.TakeLastError()); detail != "" {
@@ -280,6 +289,7 @@ Examples:
 				}
 				failedCount++
 				allSuccess = false
+				clearPendingUpdateResolution(internalID)
 			}
 		}
 
@@ -300,6 +310,7 @@ func init() {
 	upCmd.Flags().BoolP("all", "A", false, "Update all installed packages to their latest versions")
 	upCmd.Flags().Bool("self", false, "Update nvpm itself to the latest version")
 	upCmd.Flags().Bool("force", false, "bypass min-release-age safety checks")
+	upCmd.Flags().StringVar(&installUpdateResolution, "update-resolution", "", "git-only: override update-resolution when updating (e.g. always, release-age-gap:30d)")
 }
 
 // newUpdateService is a factory to allow test injection

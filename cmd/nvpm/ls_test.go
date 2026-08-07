@@ -188,10 +188,12 @@ func captureOutputWithMode(t *testing.T, fn func(), outputMode config.OutputMode
 
 	// Save current config
 	oldOutput := cfg.Flags.Output
+	oldMinReleaseAge := cfg.Flags.MinReleaseAge
 	oldColorConfigFunc := getColorConfigFunc
 
 	// Set output mode to plain for golden file tests
 	cfg.Flags.Output = outputMode
+	cfg.Flags.MinReleaseAge = 0
 	showDiscoveryProgress = false
 	showRegistryProgress = false
 	defer func() {
@@ -203,6 +205,7 @@ func captureOutputWithMode(t *testing.T, fn func(), outputMode config.OutputMode
 	})
 	defer func() {
 		cfg.Flags.Output = oldOutput
+		cfg.Flags.MinReleaseAge = oldMinReleaseAge
 		getColorConfigFunc = oldColorConfigFunc
 	}()
 

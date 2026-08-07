@@ -353,32 +353,6 @@ func (ls *ListService) gitDiscoveredRefsFromDB(sourceID string) ([]gitDiscovered
 	return out, nil
 }
 
-func formatDaysAgo(age time.Duration) string {
-	if age < 0 {
-		age = 0
-	}
-	days := int(age / (24 * time.Hour))
-	if days == 1 {
-		return "1 day ago"
-	}
-	return fmt.Sprintf("%d days ago", days)
-}
-
-func formatInDays(remaining time.Duration) string {
-	if remaining < 0 {
-		remaining = 0
-	}
-	// Round up so "almost eligible" still shows at least 1 day remaining.
-	days := int((remaining + 24*time.Hour - 1) / (24 * time.Hour))
-	if days < 1 {
-		days = 1
-	}
-	if days == 1 {
-		return "1 day"
-	}
-	return fmt.Sprintf("%d days", days)
-}
-
 // formatDiscoveredVersion formats a discovered version for display with local first-seen age.
 func formatDiscoveredVersion(display string, firstSeen, now time.Time) string {
 	display = strings.TrimSpace(display)
@@ -433,7 +407,7 @@ func formatEligibleGitRef(ref, commit string, remaining time.Duration) string {
 		sha = ""
 	}
 	if remaining > 0 {
-		in := formatInDays(remaining)
+		in := formatInDuration(remaining)
 		if sha != "" {
 			return fmt.Sprintf("%s (%s in %s)", ref, sha, in)
 		}
@@ -533,6 +507,14 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 	// filter/match by semver against the raw discovered keys. Instead, resolve each available tag
 	// to its discovery key and then check first-seen directly.
 	if providers.IsGitHostedSourceID(sourceID) {
+		if item := ls.getRegistryItem(sourceID); item.Git != nil && len(item.Git.Refs) > 0 {
+			return ls.discoveryDisplayFromRegistryGit(sourceID, installedVersion, installedCommit, item)
+		}
+		// Prefer policy-resolved remote_latest over the registry's bare semver tag when git.refs
+		// are not yet published (e.g. main chosen over stale v1.10.2).
+		if entry, ok, err := providers.GetRemoteLatest(sourceID); err == nil && ok && strings.TrimSpace(entry.Version) != "" {
+			return ls.discoveryDisplayForRemoteLatestGit(sourceID, installedVersion, installedCommit, entry)
+		}
 		now := time.Now()
 		minAge := cfg.Flags.MinReleaseAge
 		installedVersion = strings.TrimSpace(installedVersion)
@@ -689,6 +671,96 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 				out.EligibleSoon = append(out.EligibleSoon, version)
 			}
 		}
+	}
+	return out
+}
+
+func (ls *ListService) discoveryDisplayFromRegistryGit(sourceID, installedVersion, installedCommit string, item registry_parser.RegistryItem) discoveryDisplay {
+	result, _, ok := providers.ResolveGitLatestFromRegistry(item, providers.PreferBranchPolicyForSourceID(sourceID))
+	if !ok {
+		return discoveryDisplay{}
+	}
+	ref := strings.TrimSpace(result.Version)
+	commit := strings.TrimSpace(result.Commit)
+	if ref == "" {
+		return discoveryDisplay{}
+	}
+	var supersededTag string
+	var supersededUnix int64
+	if result.SupersededTag != "" {
+		supersededTag = result.SupersededTag
+		supersededUnix = result.SupersededTimeUnix
+	}
+	return ls.discoveryDisplayForResolvedGitRef(sourceID, installedVersion, installedCommit, ref, commit, supersededTag, supersededUnix)
+}
+
+func (ls *ListService) discoveryDisplayForRemoteLatestGit(sourceID, installedVersion, installedCommit string, entry providers.RemoteLatestEntry) discoveryDisplay {
+	return ls.discoveryDisplayForResolvedGitRef(
+		sourceID, installedVersion, installedCommit,
+		entry.Version, entry.Commit,
+		entry.SupersededTag, entry.SupersededUnix,
+	)
+}
+
+func (ls *ListService) discoveryDisplayForResolvedGitRef(sourceID, installedVersion, installedCommit, ref, commit, supersededTag string, supersededUnix int64) discoveryDisplay {
+	now := time.Now()
+	minAge := cfg.Flags.MinReleaseAge
+	installedVersion = strings.TrimSpace(installedVersion)
+	installedCommit = strings.TrimSpace(installedCommit)
+	ref = strings.TrimSpace(ref)
+	commit = strings.TrimSpace(commit)
+
+	out := discoveryDisplay{}
+	var firstSeen time.Time
+	if commit != "" {
+		key := providers.FormatGitDiscoveryVersionForRef(ref, commit)
+		if t, seen, err := providers.GetFirstSeen(sourceID, key); err == nil && seen {
+			firstSeen = t
+		}
+	}
+
+	availLabel := ref
+	if commit != "" && (isPreferBranchRef(ref) || providers.IsGitCommitHash(ref)) {
+		availLabel = formatGitRefWithCommitAge(ref, commit, firstSeen, now)
+	} else if !firstSeen.IsZero() {
+		availLabel = formatDiscoveredVersion(availLabel, firstSeen, now)
+	}
+	out.Available = append(out.Available, availLabel)
+
+	if firstSeen.IsZero() {
+		return out
+	}
+
+	discoveredLabel := ref
+	if isPreferBranchRef(ref) || providers.IsGitCommitHash(ref) {
+		if commit != "" {
+			discoveredLabel = shortGitSHA(commit)
+		}
+	}
+	if strings.TrimSpace(supersededTag) != "" && isPreferBranchRef(ref) {
+		tagAge := time.Duration(0)
+		if supersededUnix > 0 {
+			tagAge = now.Sub(time.Unix(supersededUnix, 0))
+		}
+		discoveredLabel = formatPreferBranchDiscovered(discoveredLabel, firstSeen, now, supersededTag, tagAge)
+	} else {
+		discoveredLabel = formatDiscoveredVersion(discoveredLabel, firstSeen, now)
+	}
+	out.Discovered = append(out.Discovered, discoveredLabel)
+
+	if installedVersion != "" && ref == installedVersion && installedCommit != "" && commit != "" && strings.EqualFold(installedCommit, commit) {
+		return out
+	}
+	if !shouldRecordDiscoveredVersion(installedVersion, ref) && !providers.HasGitCommitUpdate(installedCommit, commit) {
+		return out
+	}
+
+	age := now.Sub(firstSeen)
+	eligibleLabel := formatEligibleGitRef(ref, commit, 0)
+	if minAge <= 0 || age >= minAge {
+		out.Eligible = append(out.Eligible, eligibleLabel)
+	} else {
+		out.EligibleSoon = append(out.EligibleSoon, formatEligibleGitRef(ref, commit, minAge-age))
 	}
 	return out
 }
@@ -926,8 +998,8 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 	for _, provider := range providerOrder {
 		if packages, exists := packagesByProvider[provider]; exists {
 			markdown.WriteString(fmt.Sprintf("## %s Packages\n\n", strings.ToUpper(provider)))
-			markdown.WriteString("| Package ID | Installed | Available | Discovered | Eligible |\n")
-			markdown.WriteString("|------------|-----------|-----------|------------|----------|\n")
+			markdown.WriteString("| Package ID | Installed | Available |\n")
+			markdown.WriteString("|------------|-----------|----------|\n")
 
 			for _, pkg := range packages {
 				updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version, pkg.Commit)
@@ -948,15 +1020,7 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 				}
 
 				disc := ls.discoveryDisplayForInstalled(pkg.SourceID, pkg.Version, pkg.Commit)
-				eligibleText := joinVersionsOrDash(disc.Eligible)
-				if eligibleText == "-" && len(disc.EligibleSoon) > 0 {
-					eligibleText = strings.Join(disc.EligibleSoon, ", ")
-				}
-				discoveredText := joinVersionsOrDash(disc.Discovered)
-				if discoveredText == "-" && cfg.Flags.MinReleaseAge > 0 && (len(disc.Available) > 0) {
-					discoveredText = "-"
-				}
-				availableText := joinVersionsOrDash(disc.Available)
+				availableText := joinVersionsOrDash(mergedAvailableColumn(disc))
 				if hasUpdate && statusText != "" {
 					// include update summary first, then discovery details in separate columns
 					_ = statusText
@@ -967,12 +1031,10 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 					installedText = formatInstalledGitDisplay(pkg.SourceID, pkg.Version, pkg.Commit, time.Now())
 				}
 
-				markdown.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s |\n",
+				markdown.WriteString(fmt.Sprintf("| %s | %s | %s |\n",
 					pkg.SourceID,
 					installedText,
 					availableText,
-					discoveredText,
-					eligibleText,
 				))
 
 				totalCount++
@@ -1045,14 +1107,8 @@ func (ls *ListService) listInstalledPackagesPlain(filteredPackages []local_packa
 				fmt.Printf("   %s %s (%s) %s\n", getProviderIcon(provider), pkg.SourceID, installedText, updateInfo)
 				disc := ls.discoveryDisplayForInstalled(pkg.SourceID, pkg.Version, pkg.Commit)
 				if cfg.Flags.MinReleaseAge > 0 {
-					fmt.Printf("      available:  %s\n", joinVersionsOrDash(disc.Available))
-					fmt.Printf("      discovered: %s\n", joinVersionsOrDash(disc.Discovered))
-					if len(disc.Eligible) > 0 {
-						fmt.Printf("      eligible:   %s\n", strings.Join(disc.Eligible, ", "))
-					} else if len(disc.EligibleSoon) > 0 {
-						fmt.Printf("      eligible:   %s\n", strings.Join(disc.EligibleSoon, ", "))
-					} else {
-						fmt.Printf("      eligible:   -\n")
+					if merged := mergedAvailableColumn(disc); len(merged) > 0 {
+						fmt.Printf("      available:  %s\n", strings.Join(merged, ", "))
 					}
 				}
 				totalCount++
@@ -1563,6 +1619,17 @@ func (ls *ListService) checkUpdateAvailability(sourceID, currentVersion, install
 // resolveUpdateCandidates returns registry stable/prerelease versions, falling back to
 // the cached remote_latest entry for packages not present in the registry.
 func resolveUpdateCandidates(registry RegistryProvider, sourceID string) (stable, prerelease, remoteCommit string) {
+	item := getRegistryItem(registry, sourceID)
+	if item.Git != nil && len(item.Git.Refs) > 0 {
+		if result, _, ok := providers.ResolveGitLatestFromRegistry(item, providers.PreferBranchPolicyForSourceID(sourceID)); ok {
+			return result.Version, "", result.Commit
+		}
+	}
+	if providers.IsGitHostedSourceID(sourceID) {
+		if entry, ok, err := providers.GetRemoteLatest(sourceID); err == nil && ok && strings.TrimSpace(entry.Version) != "" {
+			return entry.Version, "", entry.Commit
+		}
+	}
 	stable, prerelease = registry.GetLatestVersions(sourceID)
 	if strings.TrimSpace(stable) != "" || strings.TrimSpace(prerelease) != "" {
 		return stable, prerelease, ""
@@ -1572,6 +1639,22 @@ func resolveUpdateCandidates(registry RegistryProvider, sourceID string) (stable
 		return "", "", ""
 	}
 	return entry.Version, "", entry.Commit
+}
+
+func getRegistryItem(registry RegistryProvider, sourceID string) registry_parser.RegistryItem {
+	if dp, ok := registry.(*defaultRegistryProvider); ok {
+		return dp.registryParser().GetBySourceId(sourceID)
+	}
+	for _, item := range registry.GetData(false) {
+		if item.Source.ID == sourceID {
+			return item
+		}
+	}
+	return registry_parser.RegistryItem{}
+}
+
+func (ls *ListService) getRegistryItem(sourceID string) registry_parser.RegistryItem {
+	return getRegistryItem(ls.registry, sourceID)
 }
 
 // Default implementations for backward compatibility

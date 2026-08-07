@@ -125,6 +125,40 @@
                     }
                   }
                 }
+              },
+              "update_resolution": {
+                "type": "object",
+                "description": "Per-package override for git update-resolution (prefers branch over release/tag).",
+                "additionalProperties": false,
+                "properties": {
+                  "prefers_branch_over_release": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["when"],
+                    "properties": {
+                      "branches": {
+                        "type": "array",
+                        "items": { "type": "string", "minLength": 1 },
+                        "minItems": 1
+                      },
+                      "when": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["kind"],
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["always", "release-age-gap"]
+                          },
+                          "gap": {
+                            "type": "string",
+                            "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h|d)$|^0$"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           }

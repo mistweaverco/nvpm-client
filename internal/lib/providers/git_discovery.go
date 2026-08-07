@@ -378,31 +378,53 @@ func resolveInstalledOrDefaultBranch(repoURL, installedVersion string) (ref, com
 }
 
 // ResolveGitLatestRef resolves the preferred latest ref (tag or branch) for a git-hosted
-// source ID. Registry packages keep the curated registry version. Non-registry packages
-// use cached remote_latest or DiscoverGitRemoteLatest (prefer-branch-over-release).
+// source ID. Registry packages with git.refs use offline policy resolution; others use
+// cached remote_latest or DiscoverGitRemoteLatest.
 func ResolveGitLatestRef(sourceID string) (string, error) {
+	result, err := ResolveGitLatestResult(sourceID)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(result.Version), nil
+}
+
+// ResolveGitLatestResult returns the full latest ref resolution for a git-hosted source ID.
+func ResolveGitLatestResult(sourceID string) (GitRemoteLatestResult, error) {
+	return ResolveGitLatestResultWithPolicy(sourceID, PreferBranchPolicyForSourceID(sourceID))
+}
+
+// ResolveGitLatestResultWithPolicy is like ResolveGitLatestResult but uses an explicit policy.
+func ResolveGitLatestResultWithPolicy(sourceID string, policy PreferBranchPolicy) (GitRemoteLatestResult, error) {
 	sourceID = strings.TrimSpace(sourceID)
 	if !IsGitHostedSourceID(sourceID) {
-		return "", fmt.Errorf("not a git-hosted source id: %s", sourceID)
+		return GitRemoteLatestResult{}, fmt.Errorf("not a git-hosted source id: %s", sourceID)
 	}
 	registry := registry_parser.NewDefaultRegistryParser()
-	if item := registry.GetBySourceId(sourceID); strings.TrimSpace(item.Version) != "" {
-		return strings.TrimSpace(item.Version), nil
+	item := registry.GetBySourceId(sourceID)
+	if item.Source.ID != "" {
+		if result, err := ResolveGitLatestRefForItem(item, policy); err == nil {
+			return result, nil
+		}
 	}
 	if entry, ok, err := GetRemoteLatest(sourceID); err == nil && ok {
 		if v := strings.TrimSpace(entry.Version); v != "" {
-			return v, nil
+			return GitRemoteLatestResult{
+				Version:            entry.Version,
+				Commit:             entry.Commit,
+				SupersededTag:      entry.SupersededTag,
+				SupersededCommit:   entry.SupersededCommit,
+				SupersededTimeUnix: entry.SupersededUnix,
+			}, nil
 		}
 	}
 	result, err := discoverGitRemoteLatestFn(sourceID, "latest")
 	if err != nil {
-		return "", err
+		return GitRemoteLatestResult{}, err
 	}
-	ver := strings.TrimSpace(result.Version)
-	if ver == "" {
-		return "", fmt.Errorf("cannot resolve latest ref for %s", sourceID)
+	if strings.TrimSpace(result.Version) == "" {
+		return GitRemoteLatestResult{}, fmt.Errorf("cannot resolve latest ref for %s", sourceID)
 	}
-	return ver, nil
+	return result, nil
 }
 
 // DiscoverGitRemoteLatest resolves the latest remote version and commit for a git-hosted package.

@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 )
@@ -235,6 +236,35 @@ func (r *RegistryItemRequires) IsEmpty() bool {
 	return r == nil || (len(r.All) == 0 && len(r.One) == 0)
 }
 
+// RegistryItemGitRef is a branch or tag tip recorded by the registry updater.
+type RegistryItemGitRef struct {
+	Ref            string `json:"ref"`
+	Kind           string `json:"kind"` // "branch" | "tag"
+	Commit         string `json:"commit"`
+	CommitDateUnix int64  `json:"commit_date_unix"`
+}
+
+func (r RegistryItemGitRef) CommitTime() time.Time {
+	if r.CommitDateUnix <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(r.CommitDateUnix, 0)
+}
+
+// RegistryItemGitTagOverwrite records when an upstream tag was force-moved.
+type RegistryItemGitTagOverwrite struct {
+	Tag            string `json:"tag"`
+	PreviousCommit string `json:"previous_commit"`
+	CurrentCommit  string `json:"current_commit"`
+}
+
+// RegistryItemGit holds remote ref metadata enriched by nvpm-registry.
+type RegistryItemGit struct {
+	FetchedAtUnix int64                         `json:"fetched_at_unix"`
+	Refs          []RegistryItemGitRef          `json:"refs"`
+	TagOverwrites []RegistryItemGitTagOverwrite `json:"tag_overwrites,omitempty"`
+}
+
 type RegistryItem struct {
 	Name              string                  `json:"name"`
 	Version           string                  `json:"version"`
@@ -250,6 +280,7 @@ type RegistryItem struct {
 	Bin               map[string]string       `json:"bin"`
 	TreeSitter        *RegistryItemTreeSitter `json:"treesitter,omitempty"`
 	Requires          *RegistryItemRequires   `json:"requires,omitempty"`
+	Git               *RegistryItemGit        `json:"git,omitempty"`
 }
 
 type RegistryRoot []RegistryItem

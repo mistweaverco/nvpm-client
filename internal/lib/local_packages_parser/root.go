@@ -37,6 +37,23 @@ type PackageExtras struct {
 	// so nvpm sync can reproduce the same query trees without re-resolving semver. Multiple rows may
 	// share the same language when several query-only repositories apply.
 	TreeSitterExternalQueries []TreeSitterExternalQueryPin `json:"treesitter_external_queries,omitempty"`
+	// UpdateResolution overrides global git update-resolution for this package.
+	UpdateResolution *LockUpdateResolution `json:"update_resolution,omitempty"`
+}
+
+// LockUpdateResolution mirrors config git.update-resolution for lock file persistence.
+type LockUpdateResolution struct {
+	PrefersBranchOverRelease LockPrefersBranchOverRelease `json:"prefers_branch_over_release"`
+}
+
+type LockPrefersBranchOverRelease struct {
+	Branches []string             `json:"branches,omitempty"`
+	When     LockPreferBranchWhen `json:"when"`
+}
+
+type LockPreferBranchWhen struct {
+	Kind string `json:"kind"`
+	Gap  string `json:"gap,omitempty"`
 }
 
 // TreeSitterParserChoice records a disambiguated parser package for a tree-sitter language name.
@@ -508,6 +525,34 @@ writeKind:
 	return lpp.fileManager.WriteFile(localPackagesFile, jsonData, 0644)
 }
 
+func (lpp *LocalPackagesParser) MergePackageUpdateResolution(sourceID string, resolution *LockUpdateResolution) error {
+	if resolution == nil {
+		return nil
+	}
+	sourceID = normalizePackageID(sourceID)
+	if sourceID == "" {
+		return nil
+	}
+	root := lpp.GetData(false)
+	for i := range root.Packages {
+		if root.Packages[i].SourceID != sourceID {
+			continue
+		}
+		if root.Packages[i].Extras == nil {
+			root.Packages[i].Extras = &PackageExtras{}
+		}
+		root.Packages[i].Extras.UpdateResolution = resolution
+		root.Schema = lockSchemaURL
+		localPackagesFile := lpp.fileManager.GetAppLocalPackagesFilePath()
+		jsonData, err := marshalIndent(root, "", "  ")
+		if err != nil {
+			return err
+		}
+		return lpp.fileManager.WriteFile(localPackagesFile, jsonData, 0644)
+	}
+	return nil
+}
+
 func (lpp *LocalPackagesParser) IsNeovimPlugin(sourceID string) bool {
 	item := lpp.GetBySourceId(sourceID)
 	return item.Extras != nil && item.Extras.Kind == KindNeovimPlugin
@@ -659,6 +704,10 @@ func MergePackageTreeSitterExternalQueryPins(sourceId string, pins []TreeSitterE
 
 func MergePackageKind(sourceId, kind string) error {
 	return globalParser.MergePackageKind(sourceId, kind)
+}
+
+func MergePackageUpdateResolution(sourceId string, resolution *LockUpdateResolution) error {
+	return globalParser.MergePackageUpdateResolution(sourceId, resolution)
 }
 
 func IsNeovimPlugin(sourceId string) bool {

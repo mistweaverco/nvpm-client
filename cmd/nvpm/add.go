@@ -228,6 +228,13 @@ Examples:
 						continue
 					}
 
+					if err := applyPendingUpdateResolution(internalID); err != nil {
+						fmt.Printf("%s Invalid --update-resolution: %v\n", IconClose(), err)
+						failureCount++
+						failures = append(failures, displayID)
+						continue
+					}
+
 					// Resolve version before installing to show actual version in spinner
 					resolvedVersion, err := resolveVersionFn(internalID, version)
 					if err != nil {
@@ -273,12 +280,14 @@ Examples:
 						failureCount++
 						failures = append(failures, displayID)
 						fmt.Printf("%s Failed to install %s@%s: %v\n", IconClose(), displayID, resolvedVersion, err)
+						clearPendingUpdateResolution(internalID)
 						continue
 					}
 
 					if success {
 						successCount++
 						_ = local_packages_parser.MergePackageIntegrations(internalID, effectiveIntegrations)
+						persistUpdateResolutionAfterInstall(internalID)
 						fmt.Printf("%s Successfully installed %s@%s\n", IconCheck(), displayID, resolvedVersion)
 						for _, line := range providers.ConsumeIntegrationReport(internalID, resolvedVersion) {
 							fmt.Printf("  %s@%s: %s\n", internalID, resolvedVersion, line)
@@ -287,6 +296,7 @@ Examples:
 						failureCount++
 						failures = append(failures, displayID)
 						printInstallFailure(displayID, resolvedVersion)
+						clearPendingUpdateResolution(internalID)
 					}
 				}
 				continue // Skip the single package processing below
@@ -308,6 +318,13 @@ Examples:
 
 			if err := providers.CheckSourceIDPrerequisites(internalID); err != nil {
 				printProviderRequirementError(displayID, err)
+				failureCount++
+				failures = append(failures, displayID)
+				continue
+			}
+
+			if err := applyPendingUpdateResolution(internalID); err != nil {
+				fmt.Printf("%s Invalid --update-resolution: %v\n", IconClose(), err)
 				failureCount++
 				failures = append(failures, displayID)
 				continue
@@ -358,12 +375,14 @@ Examples:
 				failureCount++
 				failures = append(failures, displayID)
 				fmt.Printf("%s Failed to install %s@%s: %v\n", IconClose(), displayID, resolvedVersion, err)
+				clearPendingUpdateResolution(internalID)
 				continue
 			}
 
 			if success {
 				successCount++
 				_ = local_packages_parser.MergePackageIntegrations(internalID, effectiveIntegrations)
+				persistUpdateResolutionAfterInstall(internalID)
 				fmt.Printf("%s Successfully installed %s@%s\n", IconCheck(), displayID, resolvedVersion)
 				for _, line := range providers.ConsumeIntegrationReport(internalID, resolvedVersion) {
 					fmt.Printf("  %s@%s: %s\n", internalID, resolvedVersion, line)
@@ -372,6 +391,7 @@ Examples:
 				failureCount++
 				failures = append(failures, displayID)
 				printInstallFailure(displayID, resolvedVersion)
+				clearPendingUpdateResolution(internalID)
 			}
 		}
 
@@ -430,6 +450,7 @@ func init() {
 	addCmd.Flags().StringSliceVar(&installIntegrations, "integrate", nil, "run integration backends after install (e.g. --integrate neovim)")
 	addCmd.Flags().StringVar(&installExternalTreeSitterQueries, "external-treesitter-queries", "ask", "when Neovim integration needs optional query-only git repos from the registry: ask (default), always, never (overridden by NVPM_EXTERNAL_TREESITTER_QUERIES when this flag is left at default)")
 	addCmd.Flags().BoolVar(&installForce, "force", false, "bypass min-release-age safety checks")
+	addCmd.Flags().StringVar(&installUpdateResolution, "update-resolution", "", "git-only: override update-resolution for this package (e.g. always, release-age-gap:30d, branches:main,develop)")
 	addCmd.Flags().StringVar(&installPluginEditor, "plugin", "", "install as an editor plugin (under plugins/ instead of packages/); supported: neovim")
 }
 

@@ -398,7 +398,7 @@ func formatPreferBranchDiscovered(shortSHA string, firstSeen, now time.Time, tag
 }
 
 // formatEligibleGitRef formats Eligible / EligibleSoon for git refs.
-// Eligible: "main (322c79d)"; soon: "main (322c79d in 7 days)".
+// Eligible: "main (322c79d)"; soon: "main (322c79d) in 7 days".
 func formatEligibleGitRef(ref, commit string, remaining time.Duration) string {
 	ref = strings.TrimSpace(ref)
 	sha := shortGitSHA(commit)
@@ -406,17 +406,14 @@ func formatEligibleGitRef(ref, commit string, remaining time.Duration) string {
 		ref = sha
 		sha = ""
 	}
-	if remaining > 0 {
-		in := formatInDuration(remaining)
-		if sha != "" {
-			return fmt.Sprintf("%s (%s in %s)", ref, sha, in)
-		}
-		return fmt.Sprintf("%s (in %s)", ref, in)
-	}
+	base := ref
 	if sha != "" {
-		return fmt.Sprintf("%s (%s)", ref, sha)
+		base = fmt.Sprintf("%s (%s)", ref, sha)
 	}
-	return ref
+	if remaining > 0 {
+		return fmt.Sprintf("%s in %s", base, formatInDuration(remaining))
+	}
+	return base
 }
 
 func shortGitSHA(commit string) string {
@@ -719,6 +716,24 @@ func (ls *ListService) discoveryDisplayForResolvedGitRef(sourceID, installedVers
 		}
 	}
 
+	sameAsInstalled := installedVersion != "" && ref == installedVersion && installedCommit != "" && commit != "" && strings.EqualFold(installedCommit, commit)
+	isUpdate := !sameAsInstalled && (shouldRecordDiscoveredVersion(installedVersion, ref) || providers.HasGitCommitUpdate(installedCommit, commit) || (installedVersion != "" && !strings.EqualFold(installedVersion, ref)))
+
+	// Start the local discovery clock the first time we surface a newer git tip from
+	// registry/remote_latest, so Available can show "in X days" under min-release-age.
+	if firstSeen.IsZero() && isUpdate && commit != "" {
+		_ = providers.RecordDiscoveryBatch([]providers.DiscoveryPair{{
+			SourceID: sourceID,
+			Version:  ref,
+			Commit:   commit,
+		}})
+		if t, seen, err := providers.GetFirstSeen(sourceID, providers.FormatGitDiscoveryVersionForRef(ref, commit)); err == nil && seen {
+			firstSeen = t
+		} else {
+			firstSeen = now
+		}
+	}
+
 	availLabel := ref
 	if commit != "" && (isPreferBranchRef(ref) || providers.IsGitCommitHash(ref)) {
 		availLabel = formatGitRefWithCommitAge(ref, commit, firstSeen, now)
@@ -728,6 +743,10 @@ func (ls *ListService) discoveryDisplayForResolvedGitRef(sourceID, installedVers
 	out.Available = append(out.Available, availLabel)
 
 	if firstSeen.IsZero() {
+		// No discovery clock and nothing newer than installed.
+		if isUpdate && minAge <= 0 {
+			out.Eligible = append(out.Eligible, formatEligibleGitRef(ref, commit, 0))
+		}
 		return out
 	}
 
@@ -748,10 +767,7 @@ func (ls *ListService) discoveryDisplayForResolvedGitRef(sourceID, installedVers
 	}
 	out.Discovered = append(out.Discovered, discoveredLabel)
 
-	if installedVersion != "" && ref == installedVersion && installedCommit != "" && commit != "" && strings.EqualFold(installedCommit, commit) {
-		return out
-	}
-	if !shouldRecordDiscoveredVersion(installedVersion, ref) && !providers.HasGitCommitUpdate(installedCommit, commit) {
+	if sameAsInstalled || !isUpdate {
 		return out
 	}
 

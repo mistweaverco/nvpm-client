@@ -378,7 +378,61 @@ func TestDiscoveryDisplayPreferBranchEligibleSoon(t *testing.T) {
 	assert.Equal(t, "322c79d (0 days ago; v1.2.3 120 days ago)", disc.Discovered[0])
 	assert.Empty(t, disc.Eligible)
 	require.Len(t, disc.EligibleSoon, 1)
-	assert.Equal(t, "main (322c79d in 7 days)", disc.EligibleSoon[0])
+	assert.Equal(t, "main (322c79d) in 7 days", disc.EligibleSoon[0])
+}
+
+func TestDiscoveryDisplayRecordsFirstSeenAndShowsEligibleSoon(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NVPM_HOME", home)
+	_ = files.GetAppDataPath()
+
+	providers.SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
+
+	cfg.Flags.MinReleaseAge = 7 * 24 * time.Hour
+	t.Cleanup(func() { cfg.Flags.MinReleaseAge = 0 })
+
+	mainCommit := "06ce1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	tagCommit := "496a6f1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	require.NoError(t, providers.SetRemoteLatest("github:microsoft/vscode-js-debug", providers.RemoteLatestEntry{
+		Version:          "main",
+		Commit:           mainCommit,
+		SupersededTag:    "v1.117.0",
+		SupersededCommit: tagCommit,
+		SupersededUnix:   time.Now().Add(-111 * 24 * time.Hour).Unix(),
+	}))
+
+	svc := NewListServiceWithDependencies(
+		&MockLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(string) (string, string) { return "v1.117.0", "" },
+			GetDataFunc: func(bool) []registry_parser.RegistryItem {
+				return []registry_parser.RegistryItem{{
+					Source:  registry_parser.RegistryItemSource{ID: "github:microsoft/vscode-js-debug"},
+					Version: "v1.117.0",
+				}}
+			},
+		},
+		&MockUpdateChecker{},
+		&MockFileDownloader{},
+	)
+
+	disc := svc.discoveryDisplayForInstalled(
+		"github:microsoft/vscode-js-debug",
+		"v1.117.0",
+		tagCommit,
+	)
+	require.Len(t, disc.EligibleSoon, 1)
+	assert.Contains(t, disc.EligibleSoon[0], "main (06ce1aa) in")
+	assert.Equal(t, disc.EligibleSoon, mergedAvailableColumn(disc))
+
+	// Clock should now be recorded so subsequent reads still show soon-eligible.
+	_, seen, err := providers.GetFirstSeen(
+		"github:microsoft/vscode-js-debug",
+		providers.FormatGitDiscoveryVersionForRef("main", mainCommit),
+	)
+	require.NoError(t, err)
+	assert.True(t, seen)
 }
 
 func TestDiscoveryDisplayRegistryVersionIgnoredWhenRemoteLatestPreferBranch(t *testing.T) {

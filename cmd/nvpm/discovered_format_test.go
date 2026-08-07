@@ -24,7 +24,7 @@ func TestFormatPreferBranchDisplay(t *testing.T) {
 		"322c79d", seen, now, "v1.2.3", 120*24*time.Hour,
 	))
 	assert.Equal(t, "main (322c79d)", formatEligibleGitRef("main", "322c79dabcdef", 0))
-	assert.Equal(t, "main (322c79d in 7 days)", formatEligibleGitRef("main", "322c79dabcdef", 7*24*time.Hour))
+	assert.Equal(t, "main (322c79d) in 7 days", formatEligibleGitRef("main", "322c79dabcdef", 7*24*time.Hour))
 	assert.Equal(t, "7 days", formatInDays(7*24*time.Hour))
 	assert.Equal(t, "1 day", formatInDays(time.Hour))
 }

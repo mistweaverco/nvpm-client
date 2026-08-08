@@ -504,9 +504,21 @@ func (p *GitHubProvider) Sync() bool {
 		}
 		repoPath := p.getRepoPath(pkg.SourceID, repo)
 		if _, err := githubStat(repoPath); os.IsNotExist(err) {
-			// Re-install missing packages
+			// Re-install missing packages at the lockfile commit when present.
 			Logger.Info(fmt.Sprintf("GitHub Sync: Re-installing missing package %s", repo))
-			if !p.Install(pkg.SourceID, pkg.Version) {
+			SetLockedCommit(pkg.Commit)
+			ok := p.Install(pkg.SourceID, pkg.Version)
+			ResetLockedCommit()
+			if !ok {
+				allOk = false
+			}
+		} else if strings.TrimSpace(pkg.Commit) != "" && gitWorkTreeExists(repoPath) {
+			// Existing git clone: restore the pinned commit (branch versions must not float to tip).
+			Logger.Info(fmt.Sprintf("GitHub Sync: Restoring locked commit for %s", repo))
+			SetLockedCommit(pkg.Commit)
+			ok := p.Install(pkg.SourceID, pkg.Version)
+			ResetLockedCommit()
+			if !ok {
 				allOk = false
 			}
 		} else if !IsEditorPluginPackage(pkg.SourceID) {

@@ -165,9 +165,12 @@ Press Ctrl+C to interrupt gracefully after the current package finishes.`,
 					title = fmt.Sprintf("Syncing %s@%s (integrations: %v)", id, ver, ints)
 				}
 
+				// Prefer lockfile commit for git-hosted packages so branch versions restore the pinned SHA.
+				providers.SetLockedCommit(pkg.Commit)
 				ok, err := runNvpmInstallWithTreeSitterSpinnerPhases(title, id, ver, registryItem, func() bool {
 					return providers.Install(id, ver)
 				})
+				providers.ResetLockedCommit()
 				if spinnerutil.IsInterrupted(err) {
 					printPackagesSyncInterrupted(successCount, failureCount)
 					osExit(exitCodeInterrupted)

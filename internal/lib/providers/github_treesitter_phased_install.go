@@ -258,7 +258,8 @@ func (p *GitHubProvider) gitCloneAndCheckout(sourceID, repo, version string) (re
 	}
 
 	resolvedVersion = version
-	if resolvedVersion == "" || resolvedVersion == "latest" {
+	lockedCheckout := strings.TrimSpace(GetLockedCommit()) != ""
+	if !lockedCheckout && (resolvedVersion == "" || resolvedVersion == "latest") {
 		var err error
 		resolvedVersion, err = ResolveGitLatestRef(sourceID)
 		if err != nil || strings.TrimSpace(resolvedVersion) == "" {
@@ -267,12 +268,20 @@ func (p *GitHubProvider) gitCloneAndCheckout(sourceID, repo, version string) (re
 		}
 	}
 
-	checkedOut, checkoutErr := gitCheckoutRefWithBranchFallback(githubShellOut, repoPath, resolvedVersion, p.getDefaultBranch(repo, repoPath))
+	// Prefer lockfile commit over branch/tag so sync restores the pinned revision.
+	versionLabel := resolvedVersion
+	checkoutRef := PreferLockedGitCheckoutRef(resolvedVersion)
+	checkedOut, checkoutErr := gitCheckoutRefWithBranchFallback(githubShellOut, repoPath, checkoutRef, p.getDefaultBranch(repo, repoPath))
 	if checkoutErr != nil {
-		Logger.Error(fmt.Sprintf("GitHub Install: Error checking out version %s: %v", resolvedVersion, checkoutErr))
+		Logger.Error(fmt.Sprintf("GitHub Install: Error checking out version %s: %v", checkoutRef, checkoutErr))
 		return "", "", false
 	}
-	resolvedVersion = checkedOut
+	if lockedCheckout {
+		// Keep the lockfile version label (branch/tag); checkedOut is the pinned SHA.
+		resolvedVersion = versionLabel
+	} else {
+		resolvedVersion = checkedOut
+	}
 
 	return repoPath, resolvedVersion, true
 }

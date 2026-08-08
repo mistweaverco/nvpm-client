@@ -259,9 +259,11 @@ func (p *GitLabProvider) installFromGit(sourceID, repo, version string) bool {
 		}
 	}
 
-	// Resolve version (tag/commit/branch)
+	// Resolve version label (tag/branch); lockfile commit overrides checkout target below.
 	resolvedVersion := version
-	if resolvedVersion == "" || resolvedVersion == "latest" {
+	lockedCheckout := strings.TrimSpace(GetLockedCommit()) != ""
+	if !lockedCheckout && (resolvedVersion == "" || resolvedVersion == "latest") {
+		// Try to get latest tag from the cloned repo
 		var err error
 		resolvedVersion, err = ResolveGitLatestRef(sourceID)
 		if err != nil || strings.TrimSpace(resolvedVersion) == "" {
@@ -270,12 +272,19 @@ func (p *GitLabProvider) installFromGit(sourceID, repo, version string) bool {
 		}
 	}
 
-	checkedOut, checkoutErr := gitCheckoutRefWithBranchFallback(gitlabShellOut, repoPath, resolvedVersion, p.getDefaultBranch(repo, repoPath))
+	// Prefer lockfile commit over branch/tag so sync restores the pinned revision.
+	versionLabel := resolvedVersion
+	checkoutRef := PreferLockedGitCheckoutRef(resolvedVersion)
+	checkedOut, checkoutErr := gitCheckoutRefWithBranchFallback(gitlabShellOut, repoPath, checkoutRef, p.getDefaultBranch(repo, repoPath))
 	if checkoutErr != nil {
-		Logger.Error(fmt.Sprintf("GitLab Install: Error checking out version %s: %v", resolvedVersion, checkoutErr))
+		Logger.Error(fmt.Sprintf("GitLab Install: Error checking out version %s: %v", checkoutRef, checkoutErr))
 		return false
 	}
-	resolvedVersion = checkedOut
+	if lockedCheckout {
+		resolvedVersion = versionLabel
+	} else {
+		resolvedVersion = checkedOut
+	}
 
 	// Add to local packages
 	if err := persistGitHostedPackage(sourceID, resolvedVersion, repoPath, repoURL); err != nil {
@@ -492,9 +501,21 @@ func (p *GitLabProvider) Sync() bool {
 		}
 		repoPath := p.getRepoPath(pkg.SourceID, repo)
 		if _, err := gitlabStat(repoPath); os.IsNotExist(err) {
-			// Re-install missing packages
+			// Re-install missing packages at the lockfile commit when present.
 			Logger.Info(fmt.Sprintf("GitLab Sync: Re-installing missing package %s", repo))
-			if !p.Install(pkg.SourceID, pkg.Version) {
+			SetLockedCommit(pkg.Commit)
+			ok := p.Install(pkg.SourceID, pkg.Version)
+			ResetLockedCommit()
+			if !ok {
+				allOk = false
+			}
+		} else if strings.TrimSpace(pkg.Commit) != "" && gitWorkTreeExists(repoPath) {
+			// Existing git clone: restore the pinned commit (branch versions must not float to tip).
+			Logger.Info(fmt.Sprintf("GitLab Sync: Restoring locked commit for %s", repo))
+			SetLockedCommit(pkg.Commit)
+			ok := p.Install(pkg.SourceID, pkg.Version)
+			ResetLockedCommit()
+			if !ok {
 				allOk = false
 			}
 		} else if !IsEditorPluginPackage(pkg.SourceID) {

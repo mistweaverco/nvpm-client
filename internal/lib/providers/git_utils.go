@@ -25,6 +25,16 @@ func IsGitCommitHash(s string) bool {
 	return true
 }
 
+// gitWorkTreeExists reports whether path looks like a git working tree (has .git).
+// Release-asset installs are plain directories; sync must not treat them as clones.
+func gitWorkTreeExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(path, ".git"))
+	return err == nil
+}
+
 // DetectRegistryTarget detects the current platform and returns the registry target string
 // Registry targets: darwin_arm64, darwin_x64, linux_x64, linux_arm64, linux_arm, win_x64, etc.
 func DetectRegistryTarget() string {

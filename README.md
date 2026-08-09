@@ -63,8 +63,8 @@ Besides that, we shell out a lot to install packages.
 E.g. if you want to install `npm` packages,
 you need to have `npm` installed.
 
-For the packages to work in Neovim, you either need to
-[`nvpm.nvim`] installed,
+For the packages to work in Neovim, you either need to have
+[`nvpm.nvim`](https://github.com/mistweaverco/nvpm.nvim) installed,
 or source the environment setup in your shell.
 
 ```sh
@@ -85,7 +85,7 @@ You can tell `nvpm` where to find the `nvpm-lock.json` (and optional `config.yam
 by setting the environment variable `NVPM_HOME`.
 
 If `NVPM_HOME` isn't set,
-`nvpm` will look for the `nvpm-lock.json` file in the default locations:
+`nvpm` will look for the `nvpm-lock.json` file in these default locations:
 
 - Linux: `$XDG_CONFIG_HOME/nvpm/nvpm-lock.json` or
   `$HOME/.config/nvpm/nvpm-lock.json`
@@ -123,7 +123,7 @@ Failed installs also print the underlying provider error under the failure line 
 Example:
 
 ```sh
-`nvpm`_DEBUG=debug nvpm add golang:golang.org/x/tools/gopls
+NVPM_DEBUG=debug nvpm add golang:golang.org/x/tools/gopls
 ```
 
 Optionally set `NVPM_LOG_FORMAT=json` for machine-readable logs.
@@ -308,7 +308,7 @@ A JSON Schema is provided at `schemas/config.schema.json`.
 nvpm ls
 ```
 
-or with `--all`/`-A` flag all available packages.
+or with the `--all`/`-A` flag, list all available packages from the registry.
 
 ```sh
 nvpm ls --all
@@ -471,7 +471,7 @@ nvpm rm -A yaml
 nvpm health
 ```
 
-### Where Are the Packages?
+### Where are the Packages Installed?
 
 `nvpm` uses a base path to install packages of different types.
 

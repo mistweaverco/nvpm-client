@@ -82,8 +82,12 @@ func enforceMinReleaseAge(sourceID, version string) error {
 		return nil
 	}
 	remaining := p.MinAge - age
-	return fmt.Errorf("min-release-age: %s@%s was first discovered %s ago; wait %s more or pass --force",
-		sourceID, discoveryVersion, age.Round(time.Second), remaining.Round(time.Second))
+	return &MinReleaseAgeTooSoonError{
+		SourceID:  sourceID,
+		Version:   discoveryVersion,
+		Age:       age,
+		Remaining: remaining,
+	}
 }
 
 // Global factory instance - can be replaced for testing
@@ -428,6 +432,11 @@ func Install(sourceId string, version string) bool {
 		return false
 	}
 	if err := enforceMinReleaseAge(sourceId, version); err != nil {
+		if tooSoon, ok := AsMinReleaseAgeTooSoon(err); ok {
+			// Still a failed install, but don't spam slog ERROR for a safety wait.
+			SetLastError(tooSoon.Error())
+			return false
+		}
 		logAndSetError(err.Error())
 		return false
 	}
@@ -505,8 +514,9 @@ func Remove(sourceId string) bool {
 }
 
 func Update(sourceId string) bool {
+	ClearLastError()
 	if err := CheckSourceIDPrerequisites(sourceId); err != nil {
-		Logger.Error(err.Error())
+		logAndSetError(err.Error())
 		return false
 	}
 	// Enforce min-release-age for updates too (provider Update() implementations call into
@@ -515,7 +525,12 @@ func Update(sourceId string) bool {
 	registryItem := registry.GetBySourceId(sourceId)
 	if registryItem.Version != "" {
 		if err := enforceMinReleaseAge(sourceId, registryItem.Version); err != nil {
-			Logger.Error(err.Error())
+			if tooSoon, ok := AsMinReleaseAgeTooSoon(err); ok {
+				// Safety wait: informational skip, not a hard error.
+				SetLastSkip(tooSoon.Error())
+				return false
+			}
+			logAndSetError(err.Error())
 			return false
 		}
 	}

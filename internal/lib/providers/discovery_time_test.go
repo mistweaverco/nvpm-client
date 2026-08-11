@@ -46,7 +46,12 @@ func TestEnforceMinReleaseAgeGitDiscoveryKey(t *testing.T) {
 
 	err := enforceMinReleaseAge("github:o/r", "v3.0.0")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "github:o/r@v3.0.0+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	tooSoon, ok := AsMinReleaseAgeTooSoon(err)
+	require.True(t, ok)
+	assert.Equal(t, "github:o/r", tooSoon.SourceID)
+	assert.Equal(t, "v3.0.0+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", tooSoon.Version)
+	assert.Contains(t, err.Error(), "waiting for min-release-age")
+	assert.Contains(t, err.Error(), "available in")
 }
 
 func TestRemoteLatestGetSet(t *testing.T) {

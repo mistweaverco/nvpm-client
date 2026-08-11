@@ -176,9 +176,7 @@ Examples:
 
 			success := service.UpdateAllPackages(getShowFilters(cmd))
 
-			if success {
-				service.output.Println("Successfully updated all packages")
-			} else {
+			if !success {
 				service.output.Println("Failed to update some packages")
 			}
 			return
@@ -277,6 +275,7 @@ Examples:
 		allSuccess := true
 		successCount := 0
 		failedCount := 0
+		waitingCount := 0
 
 		for idx := range internalIDs {
 			internalID := internalIDs[idx]
@@ -311,25 +310,42 @@ Examples:
 				successCount++
 				persistUpdateResolutionAfterInstall(internalID)
 				persistAlwaysTrustAfterInstall(internalID)
-			} else {
-				service.output.Printf("%s Failed to update %s\n", IconClose(), displayID)
-				if detail := strings.TrimSpace(providers.TakeLastError()); detail != "" {
-					service.output.Printf("  %s\n", detail)
-				}
-				failedCount++
-				allSuccess = false
+				continue
+			}
+
+			if skip := strings.TrimSpace(providers.TakeLastSkip()); skip != "" {
+				service.output.Printf("%s Skipped %s\n", IconLightbulb(), displayID)
+				service.output.Printf("  %s\n", skip)
+				waitingCount++
 				clearPendingUpdateResolution(internalID)
 				clearPendingAlwaysTrust(internalID)
+				continue
 			}
+
+			service.output.Printf("%s Failed to update %s\n", IconClose(), displayID)
+			if detail := strings.TrimSpace(providers.TakeLastError()); detail != "" {
+				service.output.Printf("  %s\n", detail)
+			}
+			failedCount++
+			allSuccess = false
+			clearPendingUpdateResolution(internalID)
+			clearPendingAlwaysTrust(internalID)
 		}
 
 		// Print summary
 		service.output.Printf("\nUpdate Summary:\n")
 		service.output.Printf("  Successfully updated: %d\n", successCount)
+		if waitingCount > 0 {
+			service.output.Printf("  Skipped (waiting for min-release-age): %d\n", waitingCount)
+		}
 		service.output.Printf("  Failed to update: %d\n", failedCount)
 
 		if allSuccess {
-			service.output.Printf("All packages updated successfully!\n")
+			if successCount > 0 {
+				service.output.Printf("All packages updated successfully!\n")
+			} else if waitingCount > 0 {
+				service.output.Printf("No packages updated - waiting for min-release-age.\n")
+			}
 		} else {
 			service.output.Printf("Some packages failed to update.\n")
 		}
@@ -404,6 +420,7 @@ func (us *UpdateService) UpdateAllPackages(showFilters ...[]string) bool {
 	allSuccess := true
 	successCount := 0
 	failedCount := 0
+	waitingCount := 0
 
 	for _, pkg := range packagesToUpdate {
 		if err := applyPendingUpdateResolution(pkg.SourceID); err != nil {
@@ -435,20 +452,33 @@ func (us *UpdateService) UpdateAllPackages(showFilters ...[]string) bool {
 			us.output.Printf("%s Successfully updated %s\n", IconCheck(), pkg.SourceID)
 			persistUpdateResolutionAfterInstall(pkg.SourceID)
 			persistAlwaysTrustAfterInstall(pkg.SourceID)
-		} else {
-			failedCount++
-			us.output.Printf("%s Failed to update %s\n", IconClose(), pkg.SourceID)
-			if detail := strings.TrimSpace(providers.TakeLastError()); detail != "" {
-				us.output.Printf("  %s\n", detail)
-			}
-			allSuccess = false
+			continue
+		}
+
+		if skip := strings.TrimSpace(providers.TakeLastSkip()); skip != "" {
+			us.output.Printf("%s Skipped %s\n", IconLightbulb(), pkg.SourceID)
+			us.output.Printf("  %s\n", skip)
+			waitingCount++
 			clearPendingUpdateResolution(pkg.SourceID)
 			clearPendingAlwaysTrust(pkg.SourceID)
+			continue
 		}
+
+		failedCount++
+		us.output.Printf("%s Failed to update %s\n", IconClose(), pkg.SourceID)
+		if detail := strings.TrimSpace(providers.TakeLastError()); detail != "" {
+			us.output.Printf("  %s\n", detail)
+		}
+		allSuccess = false
+		clearPendingUpdateResolution(pkg.SourceID)
+		clearPendingAlwaysTrust(pkg.SourceID)
 	}
 
 	us.output.Printf("\nUpdate Summary:\n")
 	us.output.Printf("  Successfully updated: %d\n", successCount)
+	if waitingCount > 0 {
+		us.output.Printf("  Skipped (waiting for min-release-age): %d\n", waitingCount)
+	}
 	us.output.Printf("  Failed to update: %d\n", failedCount)
 	us.output.Printf("  Skipped (up to date): %d\n", skippedCount)
 

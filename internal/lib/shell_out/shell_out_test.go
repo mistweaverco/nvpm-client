@@ -1,7 +1,9 @@
 package shell_out
 
 import (
+	"io"
 	"os"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,6 +46,42 @@ func TestShellOut(t *testing.T) {
 		// But we can at least test that it doesn't panic
 		assert.NotEqual(t, -1, exitCode) // Should not be the error exit code
 	})
+
+	t.Run("shell out discards chatty command output", func(t *testing.T) {
+		// Dup the process stdout/stderr FDs onto pipes so inherited child I/O
+		// would be visible if ShellOut failed to discard it.
+		rOut, wOut, err := os.Pipe()
+		assert.NoError(t, err)
+		rErr, wErr, err := os.Pipe()
+		assert.NoError(t, err)
+
+		savedOut, err := syscall.Dup(int(os.Stdout.Fd()))
+		assert.NoError(t, err)
+		savedErr, err := syscall.Dup(int(os.Stderr.Fd()))
+		assert.NoError(t, err)
+
+		assert.NoError(t, syscall.Dup2(int(wOut.Fd()), int(os.Stdout.Fd())))
+		assert.NoError(t, syscall.Dup2(int(wErr.Fd()), int(os.Stderr.Fd())))
+
+		exitCode, runErr := ShellOut("sh", []string{"-c", "echo leaked-out; echo leaked-err >&2"}, "", nil)
+
+		assert.NoError(t, syscall.Dup2(savedOut, int(os.Stdout.Fd())))
+		assert.NoError(t, syscall.Dup2(savedErr, int(os.Stderr.Fd())))
+		_ = syscall.Close(savedOut)
+		_ = syscall.Close(savedErr)
+		_ = wOut.Close()
+		_ = wErr.Close()
+
+		assert.NoError(t, runErr)
+		assert.Equal(t, 0, exitCode)
+
+		outBytes, _ := io.ReadAll(rOut)
+		errBytes, _ := io.ReadAll(rErr)
+		_ = rOut.Close()
+		_ = rErr.Close()
+		assert.NotContains(t, string(outBytes), "leaked-out")
+		assert.NotContains(t, string(errBytes), "leaked-err")
+	})
 }
 
 func TestHasCommand(t *testing.T) {
@@ -67,6 +105,39 @@ func TestHasCommand(t *testing.T) {
 		// This command should not exist
 		exists := HasCommand("nonexistentcommand12345", []string{}, nil)
 		assert.False(t, exists)
+	})
+
+	t.Run("has command discards chatty command output", func(t *testing.T) {
+		rOut, wOut, err := os.Pipe()
+		assert.NoError(t, err)
+		rErr, wErr, err := os.Pipe()
+		assert.NoError(t, err)
+
+		savedOut, err := syscall.Dup(int(os.Stdout.Fd()))
+		assert.NoError(t, err)
+		savedErr, err := syscall.Dup(int(os.Stderr.Fd()))
+		assert.NoError(t, err)
+
+		assert.NoError(t, syscall.Dup2(int(wOut.Fd()), int(os.Stdout.Fd())))
+		assert.NoError(t, syscall.Dup2(int(wErr.Fd()), int(os.Stderr.Fd())))
+
+		exists := HasCommand("sh", []string{"-c", "echo leaked-out; echo leaked-err >&2; exit 0"}, nil)
+
+		assert.NoError(t, syscall.Dup2(savedOut, int(os.Stdout.Fd())))
+		assert.NoError(t, syscall.Dup2(savedErr, int(os.Stderr.Fd())))
+		_ = syscall.Close(savedOut)
+		_ = syscall.Close(savedErr)
+		_ = wOut.Close()
+		_ = wErr.Close()
+
+		assert.True(t, exists)
+
+		outBytes, _ := io.ReadAll(rOut)
+		errBytes, _ := io.ReadAll(rErr)
+		_ = rOut.Close()
+		_ = rErr.Close()
+		assert.NotContains(t, string(outBytes), "leaked-out")
+		assert.NotContains(t, string(errBytes), "leaked-err")
 	})
 }
 

@@ -169,7 +169,7 @@ type TreeSitterIntegrateResolveOpts struct {
 var treeSitterIntegrateMismatchConfirmHook = defaultTreeSitterIntegrateMismatchConfirm
 
 // ResolveTreeSitterInstallIntegrations returns the integration slice to use for this registry item.
-// Non–tree-sitter packages return requested unchanged. Tree-sitter packages may prompt when
+// Non-tree-sitter packages return requested unchanged. Tree-sitter packages may prompt when
 // --integrate does not match any declared integration for this client.
 func ResolveTreeSitterInstallIntegrations(item registry_parser.RegistryItem, requested []string, opts TreeSitterIntegrateResolveOpts) ([]string, error) {
 	normalized := normalizeIntegrationRequestedSlice(requested)

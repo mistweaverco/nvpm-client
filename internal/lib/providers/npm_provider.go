@@ -28,6 +28,15 @@ var npmStat = os.Stat
 var npmMkdir = os.Mkdir
 var npmClose = func(f *os.File) error { return f.Close() }
 
+// npmQuietEnv suppresses npm's update notifier so its notices cannot pollute
+// captured output (e.g. `npm view … version`) or any remaining inherited I/O.
+func npmQuietEnv() []string {
+	return []string{
+		"NO_UPDATE_NOTIFIER=1",
+		"npm_config_update_notifier=false",
+	}
+}
+
 // Injectable local packages helpers for tests
 var lppAdd = local_packages_parser.AddLocalPackage
 var lppRemove = local_packages_parser.RemoveLocalPackage
@@ -251,9 +260,9 @@ func (p *NPMProvider) Sync() bool {
 			continue
 		}
 		Logger.Info(fmt.Sprintf("npm sync: Installing package %s@%s", name, pkg.Version))
-		installCode, err := npmShellOut("npm", []string{"install", name + "@" + pkg.Version}, p.APP_PACKAGES_DIR, nil)
+		installCode, err := npmShellOut("npm", []string{"install", "--no-update-notifier", name + "@" + pkg.Version}, p.APP_PACKAGES_DIR, npmQuietEnv())
 		if err != nil || installCode != 0 {
-			fmt.Printf("error installing %s@%s: %v\n", name, pkg.Version, err)
+			Logger.Info(fmt.Sprintf("error installing %s@%s: %v", name, pkg.Version, err))
 			allOk = false
 		} else {
 			installedCount++
@@ -396,12 +405,25 @@ func (p *NPMProvider) Update(sourceID string) bool {
 }
 
 func (p *NPMProvider) getLatestVersion(packageName string) (string, error) {
-	_, output, err := npmShellOutCapture("npm", []string{"view", packageName, "version"}, "", nil)
+	_, output, err := npmShellOutCapture("npm", []string{"view", packageName, "version", "--no-update-notifier"}, "", npmQuietEnv())
 	if err != nil {
 		Logger.Error(fmt.Sprintf("npm getLatestVersion: Command failed for %s: %v, output: %s", packageName, err, output))
 		return "", err
 	}
-	return strings.TrimSpace(output), nil
+	return firstNonNoticeLine(output), nil
+}
+
+// firstNonNoticeLine returns the first non-empty line that is not an npm notice,
+// so CombinedOutput noise cannot be mistaken for a version string.
+func firstNonNoticeLine(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "npm notice") {
+			continue
+		}
+		return line
+	}
+	return ""
 }
 
 func (p *NPMProvider) tryNpmCi() bool {
@@ -411,7 +433,7 @@ func (p *NPMProvider) tryNpmCi() bool {
 		return false
 	}
 	Logger.Info("npm sync: Using npm ci for faster bulk installation")
-	installCode, err := npmShellOut("npm", []string{"ci"}, p.APP_PACKAGES_DIR, nil)
+	installCode, err := npmShellOut("npm", []string{"ci", "--no-update-notifier"}, p.APP_PACKAGES_DIR, npmQuietEnv())
 	if err != nil || installCode != 0 {
 		Logger.Info(fmt.Sprintf("npm sync: npm ci failed, falling back to individual package installation: %v", err))
 		return false

@@ -215,7 +215,7 @@ func TestNPMNeedsUpdateCiFailThenInstallIndividually(t *testing.T) {
 	// tryNpmCi should fail
 	oldOut := npmShellOut
 	npmShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
-		if len(args) == 1 && args[0] == "ci" {
+		if len(args) > 0 && args[0] == "ci" {
 			return 1, errors.New("ci")
 		}
 		// install individually succeeds
@@ -259,7 +259,7 @@ func TestNPMAllConditionalsToggle(t *testing.T) {
 	// Case 2: needsUpdate with ci success -> returns true early
 	oldOut := npmShellOut
 	npmShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
-		if len(args) == 1 && args[0] == "ci" {
+		if len(args) > 0 && args[0] == "ci" {
 			return 0, nil
 		}
 		return 0, nil
@@ -900,4 +900,11 @@ func TestNPMCustomBinFieldUnmarshal(t *testing.T) {
 	// invalid type
 	err = cbf.UnmarshalJSON([]byte(`123`))
 	assert.Error(t, err)
+}
+
+func TestFirstNonNoticeLine(t *testing.T) {
+	assert.Equal(t, "1.2.3", firstNonNoticeLine("1.2.3\n"))
+	assert.Equal(t, "1.2.3", firstNonNoticeLine("npm notice New version\n1.2.3\nnpm notice\n"))
+	assert.Equal(t, "", firstNonNoticeLine("npm notice only\n"))
+	assert.Equal(t, "", firstNonNoticeLine(""))
 }

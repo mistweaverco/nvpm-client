@@ -1,6 +1,7 @@
 package shell_out
 
 import (
+	"io"
 	"os"
 	"os/exec"
 )
@@ -8,6 +9,8 @@ import (
 func ShellOut(command string, args []string, dir string, env []string) (int, error) {
 	cmd := exec.Command(command, args...)
 	cmd.Dir = dir
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
 	if env != nil {
 		env = append(env, os.Environ()...)
 		cmd.Env = append(cmd.Env, env...)
@@ -24,6 +27,8 @@ func ShellOut(command string, args []string, dir string, env []string) (int, err
 
 func HasCommand(command string, args []string, env []string) bool {
 	cmd := exec.Command(command, args...)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
 	if env != nil {
 		env = append(env, os.Environ()...)
 		cmd.Env = append(cmd.Env, env...)

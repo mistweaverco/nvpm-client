@@ -232,9 +232,36 @@ nvpm show \
 
 ```sh
 nvpm add \
-  npm:@mistweavercokulala-ls@0.1.0 \
+  npm:@mistweaverco/kulala-fmt \
   pypi:black \
   golang:golangci-lint
+```
+
+#### `nvpm add` (a fixed version)
+
+This can be either used to "downgrade" or "upgrade" a package to a specific version.
+
+This is especially useful for packages that are not yet available in the registry
+(or have outdated version information in the registry).
+
+> [!NOTE]
+> `nvpm up` will refuse to "update" a package to a fixed version.
+> The reasoning is that `nvpm up` is meant to update packages and not to lock them to a specific version.
+>
+> `nvpm up package@version` will fail with an error message,
+> telling you to either use `nvpm add package@version` or `nvpm set package@version`.
+
+```sh
+nvpm add npm:@mistweavercokulala-cli@0.1.0
+```
+
+Also accepts multiple packages at once:
+
+```sh
+nvpm add \
+  npm:@mistweavercokulala-cli@0.1.0 \
+  pypi:black@22.3.0 \
+  golang:golangci-lint@v1.52.2
 ```
 
 #### `nvpm sync`

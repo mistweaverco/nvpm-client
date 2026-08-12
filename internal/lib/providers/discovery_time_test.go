@@ -87,5 +87,26 @@ func TestHasGitCommitUpdate(t *testing.T) {
 	assert.False(t, HasGitCommitUpdate("", "abc"))
 	assert.False(t, HasGitCommitUpdate("abc", ""))
 	assert.False(t, HasGitCommitUpdate("abc", "ABC"))
+	assert.False(t, HasGitCommitUpdate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaa"))
 	assert.True(t, HasGitCommitUpdate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+}
+
+func TestGitCommitStillNeedsUpdateUsesLocalRemoteLatestOnly(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+
+	sourceID := "github:mistweaverco/floaterm.nvim"
+	installed := "301ea764263d0c1a42a8fc2985047c0012347401"
+	stale := "19198f485082474248b5919f6aa0e473a2dd9726"
+	require.NoError(t, RecordDiscovery(sourceID, FormatGitDiscoveryVersion("v1.1.0", stale)))
+	require.NoError(t, RecordDiscovery(sourceID, FormatGitDiscoveryVersion("v1.1.0", installed)))
+	require.NoError(t, SetRemoteLatest(sourceID, RemoteLatestEntry{
+		Version: "v1.1.0",
+		Commit:  installed,
+	}))
+
+	assert.True(t, HasGitCommitUpdate(installed, stale))
+	assert.False(t, GitCommitStillNeedsUpdate(sourceID, "v1.1.0", installed, stale))
+	// Registry tip never recorded for this ref → still treat as an update.
+	assert.True(t, GitCommitStillNeedsUpdate(sourceID, "v1.1.0", installed, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
 }

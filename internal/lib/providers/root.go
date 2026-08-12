@@ -48,19 +48,19 @@ func SetMinReleaseAgePolicy(p MinReleaseAgePolicy) {
 
 func enforceMinReleaseAge(sourceID, version string) error {
 	p := minReleaseAgePolicy
-	if p.BypassAll || p.Force || p.MinAge <= 0 {
-		return nil
-	}
-	if PackageAlwaysTrust(sourceID) {
+	if p.BypassAll || p.MinAge <= 0 {
 		return nil
 	}
 	if version == "" || version == "latest" {
 		// We only gate concrete versions.
 		return nil
 	}
+	trust := PackageAlwaysTrust(sourceID)
+	// Always resolve and record discovery - including for --force / always_trust - so
+	// tag SHA mismatch detection has history. Those flags only skip the age wait below.
 	discoveryVersion, err := discoveryVersionForEnforcement(sourceID, version)
 	if err != nil {
-		if p.Force || p.BypassAll {
+		if p.Force || p.BypassAll || trust {
 			Logger.Info(fmt.Sprintf("min-release-age: warning: cannot resolve discovery version for %s@%s: %v", sourceID, version, err))
 			discoveryVersion = version
 		} else {
@@ -71,11 +71,14 @@ func enforceMinReleaseAge(sourceID, version string) error {
 	firstSeen, err := getOrSetFirstSeen(sourceID, discoveryVersion, now)
 	if err != nil {
 		// If we cannot read/write the local discovery DB, fail closed unless explicitly forced.
-		if p.Force || p.BypassAll {
+		if p.Force || p.BypassAll || trust {
 			Logger.Info(fmt.Sprintf("min-release-age: warning: cannot persist discovery time: %v", err))
 			return nil
 		}
 		return fmt.Errorf("min-release-age: cannot read discovery database: %w", err)
+	}
+	if p.Force || trust {
+		return nil
 	}
 	age := now.Sub(firstSeen)
 	if age >= p.MinAge {
@@ -431,6 +434,12 @@ func Install(sourceId string, version string) bool {
 		logAndSetError(err.Error())
 		return false
 	}
+	// Tag SHA checks must run before min-release-age recording. Otherwise recording the
+	// live tip (especially with always_trust / --force age bypass) would hide a
+	// force-moved tag from the mismatch detector on add/set/up.
+	if !enforceGitTagSHAOrReject(sourceId, version) {
+		return false
+	}
 	if err := enforceMinReleaseAge(sourceId, version); err != nil {
 		if tooSoon, ok := AsMinReleaseAgeTooSoon(err); ok {
 			// Still a failed install, but don't spam slog ERROR for a safety wait.
@@ -439,20 +448,6 @@ func Install(sourceId string, version string) bool {
 		}
 		logAndSetError(err.Error())
 		return false
-	}
-	// Sync restores a pinned commit; skip live tag SHA checks in that case.
-	if strings.TrimSpace(GetLockedCommit()) == "" && IsGitHostedSourceID(sourceId) {
-		ref := strings.TrimSpace(version)
-		if ref != "" && ref != "latest" {
-			if err := CheckGitTagSHAMismatchLive(sourceId, ref); err != nil {
-				if !allowForcedTagSHAMismatch() {
-					// User-facing via TakeLastError; avoid duplicating as slog ERROR when debug is off.
-					SetLastError(err.Error())
-					return false
-				}
-				Logger.Info(fmt.Sprintf("Install: %v (--force accepting new commit)", err))
-			}
-		}
 	}
 	provider := detectProvider(sourceId)
 	switch provider {
@@ -538,6 +533,10 @@ func Update(sourceId string) bool {
 	registry := registry_parser.NewDefaultRegistryParser()
 	registryItem := registry.GetBySourceId(sourceId)
 	if registryItem.Version != "" {
+		// SHA check before age recording - same ordering requirement as Install.
+		if !enforceGitTagSHAOrReject(sourceId, registryItem.Version) {
+			return false
+		}
 		if err := enforceMinReleaseAge(sourceId, registryItem.Version); err != nil {
 			if tooSoon, ok := AsMinReleaseAgeTooSoon(err); ok {
 				// Safety wait: informational skip, not a hard error.

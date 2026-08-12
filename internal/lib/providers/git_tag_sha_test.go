@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,12 +42,94 @@ func TestCheckGitTagSHAAgainstDiscoveryFloatermRegression(t *testing.T) {
 	assert.Contains(t, err.Error(), "tag/release SHA mismatch")
 	assert.Contains(t, err.Error(), "19198f4")
 	assert.Contains(t, err.Error(), "301ea76")
-	assert.Contains(t, err.Error(), "nvpm set")
+	assert.Contains(t, err.Error(), "--force")
+	assert.Contains(t, err.Error(), "always_trust does not bypass")
 
 	// Same commit is fine.
 	require.NoError(t, CheckGitTagSHAAgainstDiscovery(sourceID, "v1.1.0", oldCommit))
 	// Branches are mutable and never mismatch.
 	require.NoError(t, CheckGitTagSHAAgainstDiscovery(sourceID, "main", newCommit))
+
+	// After accepting the new tip (force update), the old recording must not keep failing.
+	require.NoError(t, RecordDiscovery(sourceID, FormatGitDiscoveryVersion("v1.1.0", newCommit)))
+	require.NoError(t, CheckGitTagSHAAgainstDiscovery(sourceID, "v1.1.0", newCommit))
+}
+
+func TestRecordingLiveTipBeforeSHACheckHidesMismatch(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+
+	sourceID := "github:mistweaverco/floaterm.nvim"
+	oldCommit := "19198f485082474248b5919f6aa0e473a2dd9726"
+	newCommit := "301ea764263d0c1a42a8fc2985047c0012347401"
+	require.NoError(t, RecordDiscovery(sourceID, FormatGitDiscoveryVersion("v1.1.0", oldCommit)))
+
+	// Bug pattern: recording the live tip first makes the mismatch check pass.
+	require.NoError(t, RecordDiscovery(sourceID, FormatGitDiscoveryVersion("v1.1.0", newCommit)))
+	require.NoError(t, CheckGitTagSHAAgainstDiscovery(sourceID, "v1.1.0", newCommit))
+
+	// With only the old tip recorded, the mismatch is visible - enforceGitTagSHAOrReject
+	// must run before enforceMinReleaseAge so we never hide this.
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+	require.NoError(t, RecordDiscovery(sourceID, FormatGitDiscoveryVersion("v1.1.0", oldCommit)))
+	err := CheckGitTagSHAAgainstDiscovery(sourceID, "v1.1.0", newCommit)
+	require.Error(t, err)
+	_, ok := AsGitTagSHAMismatch(err)
+	assert.True(t, ok)
+}
+
+func TestEnforceGitTagSHAOrRejectRequiresForce(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+	ClearLastError()
+
+	sourceID := "github:mistweaverco/floaterm.nvim"
+	oldCommit := "19198f485082474248b5919f6aa0e473a2dd9726"
+	newCommit := "301ea764263d0c1a42a8fc2985047c0012347401"
+	require.NoError(t, RecordDiscovery(sourceID, FormatGitDiscoveryVersion("v1.1.0", oldCommit)))
+
+	old := gitDiscoveryShellOutCapture
+	t.Cleanup(func() {
+		gitDiscoveryShellOutCapture = old
+		SetMinReleaseAgePolicy(MinReleaseAgePolicy{MinAge: 0})
+	})
+	gitDiscoveryShellOutCapture = func(_ string, args []string, _ string, _ []string) (int, string, error) {
+		if len(args) >= 1 && args[0] == "ls-remote" {
+			return 0, newCommit + "\trefs/tags/v1.1.0\n", nil
+		}
+		return 1, "", nil
+	}
+
+	SetMinReleaseAgePolicy(MinReleaseAgePolicy{MinAge: 7 * 24 * time.Hour, Force: false})
+	assert.False(t, enforceGitTagSHAOrReject(sourceID, "v1.1.0"))
+	assert.Contains(t, TakeLastError(), "tag/release SHA mismatch")
+
+	SetMinReleaseAgePolicy(MinReleaseAgePolicy{MinAge: 7 * 24 * time.Hour, Force: true})
+	assert.True(t, enforceGitTagSHAOrReject(sourceID, "v1.1.0"))
+}
+
+func TestAcceptGitTagSHAMismatchRecordsLiveTip(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+
+	sourceID := "github:mistweaverco/floaterm.nvim"
+	oldCommit := "19198f485082474248b5919f6aa0e473a2dd9726"
+	newCommit := "301ea764263d0c1a42a8fc2985047c0012347401"
+	require.NoError(t, RecordDiscovery(sourceID, FormatGitDiscoveryVersion("v1.1.0", oldCommit)))
+
+	oldResolve := gitDiscoveryShellOutCapture
+	t.Cleanup(func() { gitDiscoveryShellOutCapture = oldResolve })
+	gitDiscoveryShellOutCapture = func(_ string, args []string, _ string, _ []string) (int, string, error) {
+		if len(args) >= 1 && args[0] == "ls-remote" {
+			return 0, newCommit + "\trefs/tags/v1.1.0\n", nil
+		}
+		return 1, "", nil
+	}
+
+	require.Error(t, CheckGitTagSHAAgainstDiscovery(sourceID, "v1.1.0", newCommit))
+	acceptGitTagSHAMismatch(sourceID, "v1.1.0")
+	require.NoError(t, CheckGitTagSHAAgainstDiscovery(sourceID, "v1.1.0", newCommit))
 }
 
 func TestGitFetchOriginTagsReportsSHAMismatch(t *testing.T) {

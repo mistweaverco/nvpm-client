@@ -1743,11 +1743,12 @@ func (ls *ListService) checkUpdateAvailability(sourceID, currentVersion, install
 		return "", false // No registry or remote-latest info available
 	}
 	latestVersion := chooseBestRemoteVersion(currentVersion, stable, prerelease)
-	if providers.HasGitCommitUpdate(installedCommit, remoteCommit) {
+	if providers.GitCommitStillNeedsUpdate(sourceID, latestVersion, installedCommit, remoteCommit) {
 		return fmt.Sprintf("%s Update available: v%s", IconRefresh(), latestVersion), true
 	}
 	if strings.TrimSpace(installedCommit) != "" && strings.TrimSpace(remoteCommit) != "" {
-		// Commits match: treat as up to date even if version strings differ (e.g. branch aliases).
+		// Commits match (or remote_latest says install matches the reconciled tip):
+		// treat as up to date even if version strings differ (e.g. branch aliases).
 		return IconCheckCircle() + " Up to date", false
 	}
 	// If local version is unknown or set to "latest", always show update to the concrete remote version

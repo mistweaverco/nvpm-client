@@ -24,7 +24,7 @@ func (e *GitTagSHAMismatchError) Error() string {
 	prev := shortCommitForError(e.PreviousCommit)
 	remote := shortCommitForError(e.RemoteCommit)
 	return fmt.Sprintf(
-		"tag/release SHA mismatch for %s@%s: previously recorded %s, remote now %s (upstream tag was force-moved). Refusing to update; re-run with --force to accept the new commit.",
+		"tag/release SHA mismatch for %s@%s: previously recorded %s, remote now %s (upstream tag was force-moved). Refusing to update; re-run with --force to accept the new commit (always_trust does not bypass tag SHA checks).",
 		e.SourceID, e.Tag, prev, remote,
 	)
 }
@@ -131,7 +131,10 @@ func CheckGitTagSHAMismatchLive(sourceID, ref string) error {
 	return CheckGitTagSHAAgainstDiscovery(sourceID, ref, live)
 }
 
-// CheckGitTagSHAAgainstDiscovery fails when discovery has recorded ref at a different commit.
+// CheckGitTagSHAAgainstDiscovery fails when discovery has previously recorded this
+// tag/release, but never at the current remote commit (force-moved to an unseen tip).
+// Once the new tip has been accepted (recorded), subsequent checks succeed even if an
+// older tip for the same tag remains in discovery history.
 func CheckGitTagSHAAgainstDiscovery(sourceID, ref, remoteCommit string) error {
 	sourceID = strings.TrimSpace(sourceID)
 	ref = strings.TrimSpace(ref)
@@ -140,21 +143,38 @@ func CheckGitTagSHAAgainstDiscovery(sourceID, ref, remoteCommit string) error {
 		return nil
 	}
 	prevs, err := DiscoveredCommitsForRef(sourceID, ref)
-	if err != nil {
+	if err != nil || len(prevs) == 0 {
 		return nil
 	}
 	for _, prev := range prevs {
 		if gitCommitsEqual(prev, remoteCommit) {
-			continue
-		}
-		return &GitTagSHAMismatchError{
-			SourceID:       sourceID,
-			Tag:            ref,
-			PreviousCommit: prev,
-			RemoteCommit:   remoteCommit,
+			return nil
 		}
 	}
-	return nil
+	return &GitTagSHAMismatchError{
+		SourceID:       sourceID,
+		Tag:            ref,
+		PreviousCommit: prevs[0],
+		RemoteCommit:   remoteCommit,
+	}
+}
+
+// acceptGitTagSHAMismatch records the live tip for ref so a force-accepted
+// force-moved tag does not keep failing on subsequent updates.
+func acceptGitTagSHAMismatch(sourceID, ref string) {
+	sourceID = strings.TrimSpace(sourceID)
+	ref = strings.TrimSpace(ref)
+	if !IsGitHostedSourceID(sourceID) || isMutableGitRef(ref) {
+		return
+	}
+	live, err := ResolveGitDiscoveryCommit(sourceID, ref)
+	if err != nil || strings.TrimSpace(live) == "" {
+		return
+	}
+	if err := RecordDiscovery(sourceID, FormatGitDiscoveryVersionForRef(ref, live)); err != nil {
+		Logger.Info(fmt.Sprintf("warning: could not record accepted tag tip for %s@%s: %v", sourceID, ref, err))
+	}
+	RefreshRemoteLatestAfterInstall(sourceID, ref, live)
 }
 
 // parseGitTagClobberRejections extracts tag names from `git fetch --tags` rejection output.
@@ -272,7 +292,33 @@ func gitFetchOriginTags(capture gitShellOutCaptureFn, repoPath, sourceID, target
 	return fmt.Errorf("git fetch --tags failed: exit %d", code)
 }
 
+// enforceGitTagSHAOrReject blocks install/update when a tag/release tip was force-moved
+// relative to discovery history, unless --force was passed. Sync (locked commit) skips this.
+// Returns false when the operation must abort (LastError already set).
+func enforceGitTagSHAOrReject(sourceID, version string) bool {
+	if strings.TrimSpace(GetLockedCommit()) != "" {
+		return true
+	}
+	if !IsGitHostedSourceID(sourceID) {
+		return true
+	}
+	ref := strings.TrimSpace(version)
+	if ref == "" || ref == "latest" {
+		return true
+	}
+	if err := CheckGitTagSHAMismatchLive(sourceID, ref); err != nil {
+		if !allowForcedTagSHAMismatch() {
+			SetLastError(err.Error())
+			return false
+		}
+		Logger.Info(fmt.Sprintf("%v (--force accepting new commit)", err))
+		acceptGitTagSHAMismatch(sourceID, ref)
+	}
+	return true
+}
+
 // allowForcedTagSHAMismatch reports whether CLI --force should accept force-moved tags.
+// always_trust must never satisfy this - it only skips min-release-age, not tag SHA checks.
 func allowForcedTagSHAMismatch() bool {
 	return minReleaseAgePolicy.Force
 }

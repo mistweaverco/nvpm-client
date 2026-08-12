@@ -366,6 +366,7 @@ func (p *GitLabProvider) Update(sourceID string) bool {
 			return false
 		}
 		Logger.Info(fmt.Sprintf("GitLab Update: %v (--force accepting new commit)", err))
+		acceptGitTagSHAMismatch(sourceID, latestVersion)
 	}
 
 	if err := gitFetchOriginTags(gitlabShellOutCapture, repoPath, sourceID, latestVersion, force); err != nil {

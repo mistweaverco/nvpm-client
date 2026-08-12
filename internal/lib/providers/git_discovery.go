@@ -273,7 +273,11 @@ func persistGitHostedPackage(sourceID, tag, repoPath, repoURL string) error {
 	if commit == "" {
 		return fmt.Errorf("cannot resolve commit for %s@%s", sourceID, tag)
 	}
-	return local_packages_parser.AddLocalPackageWithCommit(sourceID, tag, commit)
+	if err := local_packages_parser.AddLocalPackageWithCommit(sourceID, tag, commit); err != nil {
+		return err
+	}
+	RefreshRemoteLatestAfterInstall(sourceID, tag, commit)
+	return nil
 }
 
 func gitRevParseHEAD(dir string) (string, error) {

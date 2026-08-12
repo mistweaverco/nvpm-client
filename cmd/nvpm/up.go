@@ -293,10 +293,25 @@ Use nvpm add / nvpm set to install or switch to a specific version.`,
 		successCount := 0
 		failedCount := 0
 		waitingCount := 0
+		skippedUpToDate := 0
+		installedByID := map[string]local_packages_parser.LocalPackageItem{}
+		for _, pkg := range service.localPackages.GetData(true).Packages {
+			installedByID[pkg.SourceID] = pkg
+		}
 
 		for idx := range internalIDs {
 			internalID := internalIDs[idx]
 			displayID := displayIDs[idx]
+
+			if pkg, ok := installedByID[internalID]; ok {
+				if !service.checkUpdateAvailability(internalID, pkg.Version, pkg.Commit) {
+					service.output.Printf("%s %s is already up to date\n", IconCheck(), displayID)
+					skippedUpToDate++
+					clearPendingUpdateResolution(internalID)
+					clearPendingAlwaysTrust(internalID)
+					continue
+				}
+			}
 
 			if err := applyPendingUpdateResolution(internalID); err != nil {
 				service.output.Printf("%s Invalid --update-resolution: %v\n", IconClose(), err)
@@ -352,6 +367,9 @@ Use nvpm add / nvpm set to install or switch to a specific version.`,
 		// Print summary
 		service.output.Printf("\nUpdate Summary:\n")
 		service.output.Printf("  Successfully updated: %d\n", successCount)
+		if skippedUpToDate > 0 {
+			service.output.Printf("  Skipped (up to date): %d\n", skippedUpToDate)
+		}
 		if waitingCount > 0 {
 			service.output.Printf("  Skipped (waiting for min-release-age): %d\n", waitingCount)
 		}
@@ -362,6 +380,8 @@ Use nvpm add / nvpm set to install or switch to a specific version.`,
 				service.output.Printf("All packages updated successfully!\n")
 			} else if waitingCount > 0 {
 				service.output.Printf("No packages updated - waiting for min-release-age.\n")
+			} else if skippedUpToDate > 0 {
+				service.output.Printf("All packages are up to date.\n")
 			}
 		} else {
 			service.output.Printf("Some packages failed to update.\n")
@@ -510,7 +530,7 @@ func (us *UpdateService) checkUpdateAvailability(sourceID, currentVersion, insta
 		return false
 	}
 	latestVersion := chooseBestRemoteVersion(currentVersion, stable, prerelease)
-	if providers.HasGitCommitUpdate(installedCommit, remoteCommit) {
+	if providers.GitCommitStillNeedsUpdate(sourceID, latestVersion, installedCommit, remoteCommit) {
 		return true
 	}
 	if strings.TrimSpace(installedCommit) != "" && strings.TrimSpace(remoteCommit) != "" {

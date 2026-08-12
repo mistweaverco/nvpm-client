@@ -372,6 +372,7 @@ func (p *GitHubProvider) Update(sourceID string) bool {
 			return false
 		}
 		Logger.Info(fmt.Sprintf("GitHub Update: %v (--force accepting new commit)", err))
+		acceptGitTagSHAMismatch(sourceID, latestVersion)
 	}
 
 	if err := gitFetchOriginTags(githubShellOutCapture, repoPath, sourceID, latestVersion, force); err != nil {

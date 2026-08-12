@@ -359,6 +359,7 @@ func (p *CodebergProvider) Update(sourceID string) bool {
 			return false
 		}
 		Logger.Info(fmt.Sprintf("Codeberg Update: %v (--force accepting new commit)", err))
+		acceptGitTagSHAMismatch(sourceID, latestVersion)
 	}
 
 	if err := gitFetchOriginTags(codebergShellOutCapture, repoPath, sourceID, latestVersion, force); err != nil {

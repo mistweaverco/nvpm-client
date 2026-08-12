@@ -276,5 +276,70 @@ func HasGitCommitUpdate(installedCommit, remoteCommit string) bool {
 	if installedCommit == "" || remoteCommit == "" {
 		return false
 	}
-	return !strings.EqualFold(installedCommit, remoteCommit)
+	if strings.EqualFold(installedCommit, remoteCommit) {
+		return false
+	}
+	// Treat short/full SHA prefixes as equal.
+	a := strings.ToLower(installedCommit)
+	b := strings.ToLower(remoteCommit)
+	if len(a) >= 7 && len(b) >= 7 && (strings.HasPrefix(a, b) || strings.HasPrefix(b, a)) {
+		return false
+	}
+	return true
+}
+
+// GitCommitStillNeedsUpdate reports whether a registry/remote commit mismatch still
+// means the package needs updating. Local-only (no network): if remote_latest matches
+// the installed commit and the registry tip is a previously discovered tip for this ref
+// (e.g. a force-moved tag we already accepted), it is not an update.
+func GitCommitStillNeedsUpdate(sourceID, ref, installedCommit, remoteCommit string) bool {
+	if !HasGitCommitUpdate(installedCommit, remoteCommit) {
+		return false
+	}
+	entry, ok, err := GetRemoteLatest(sourceID)
+	if err != nil || !ok {
+		return true
+	}
+	ref = strings.TrimSpace(ref)
+	if ref != "" && strings.TrimSpace(entry.Version) != "" && !strings.EqualFold(entry.Version, ref) {
+		return true
+	}
+	if HasGitCommitUpdate(installedCommit, entry.Commit) {
+		return true
+	}
+	// Install matches remote_latest. Only ignore the registry tip when it is an older
+	// tip we already recorded for this ref (stale metadata after accepting a move).
+	prevs, err := DiscoveredCommitsForRef(sourceID, ref)
+	if err != nil {
+		return true
+	}
+	for _, prev := range prevs {
+		if gitCommitsEqual(prev, remoteCommit) {
+			return false
+		}
+	}
+	return true
+}
+
+// RefreshRemoteLatestAfterInstall updates remote_latest when we just installed the
+// cached "latest" ref (or when no cache exists yet), so commit tips stay in sync.
+func RefreshRemoteLatestAfterInstall(sourceID, version, commit string) {
+	sourceID = strings.TrimSpace(sourceID)
+	version = strings.TrimSpace(version)
+	commit = strings.TrimSpace(commit)
+	if !IsGitHostedSourceID(sourceID) || version == "" || commit == "" {
+		return
+	}
+	entry, ok, err := GetRemoteLatest(sourceID)
+	if err != nil {
+		return
+	}
+	if ok && strings.TrimSpace(entry.Version) != "" && !strings.EqualFold(entry.Version, version) {
+		// Installed an older/pinned ref; do not clobber the cached latest label.
+		return
+	}
+	_ = SetRemoteLatest(sourceID, RemoteLatestEntry{
+		Version: version,
+		Commit:  commit,
+	})
 }

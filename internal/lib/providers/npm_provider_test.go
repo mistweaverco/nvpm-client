@@ -9,6 +9,7 @@ import (
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -907,4 +908,51 @@ func TestFirstNonNoticeLine(t *testing.T) {
 	assert.Equal(t, "1.2.3", firstNonNoticeLine("npm notice New version\n1.2.3\nnpm notice\n"))
 	assert.Equal(t, "", firstNonNoticeLine("npm notice only\n"))
 	assert.Equal(t, "", firstNonNoticeLine(""))
+}
+
+func TestNPMCreatePackageSymlinksUsesRegistryBinAliases(t *testing.T) {
+	_ = withTempNvpmHome(t)
+
+	p := NewProviderNPM()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	_ = local_packages_parser.AddLocalPackage("npm:typescript", "5.0.0")
+
+	writeRegistry(t, []registry_parser.RegistryItem{{
+		Name:    "typescript",
+		Version: "5.0.0",
+		Source:  registry_parser.RegistryItemSource{ID: "npm:typescript"},
+		Bin: map[string]string{
+			"tsc":  "npm:tsc",
+			"tsgo": "npm:tsc",
+		},
+	}})
+	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
+
+	nm := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "typescript")
+	binDir := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin")
+	_ = os.MkdirAll(nm, 0755)
+	_ = os.MkdirAll(binDir, 0755)
+	// Upstream package.json only exposes tsc - no tsgo.
+	assert.NoError(t, os.WriteFile(filepath.Join(nm, "package.json"), []byte(
+		`{"name":"typescript","version":"5.0.0","bin":{"tsc":"./bin/tsc"}}`,
+	), 0644))
+	assert.NoError(t, os.WriteFile(filepath.Join(binDir, "tsc"), []byte("#!/bin/sh\n"), 0755))
+
+	assert.NoError(t, p.createPackageSymlinks("typescript"))
+
+	appBin := files.GetAppBinPath()
+	tscLink := filepath.Join(appBin, "tsc")
+	tsgoLink := filepath.Join(appBin, "tsgo")
+	tscTarget, err := os.Readlink(tscLink)
+	assert.NoError(t, err)
+	tsgoTarget, err := os.Readlink(tsgoLink)
+	assert.NoError(t, err)
+	assert.Equal(t, filepath.Join(binDir, "tsc"), tscTarget)
+	assert.Equal(t, filepath.Join(binDir, "tsc"), tsgoTarget)
+
+	assert.NoError(t, p.removePackageSymlinks("typescript"))
+	_, err = os.Lstat(tscLink)
+	assert.True(t, os.IsNotExist(err))
+	_, err = os.Lstat(tsgoLink)
+	assert.True(t, os.IsNotExist(err))
 }

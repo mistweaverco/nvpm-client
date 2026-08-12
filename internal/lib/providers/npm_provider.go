@@ -10,6 +10,7 @@ import (
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
@@ -306,45 +307,94 @@ func (p *NPMProvider) isPackageInstalled(packageName, expectedVersion string) bo
 	return pkg.Version == expectedVersion
 }
 
-func (p *NPMProvider) createPackageSymlinks(packageName string) error {
-	nodeModulesPath := filepath.Join(p.APP_PACKAGES_DIR, "node_modules")
-	packagePath := filepath.Join(nodeModulesPath, packageName)
+// normalizeNpmBinCommand turns registry bin values like "npm:tsc" into the
+// node_modules/.bin entry name "tsc".
+func (p *NPMProvider) normalizeNpmBinCommand(commandToExec string) string {
+	commandToExec = strings.TrimSpace(commandToExec)
+	if strings.HasPrefix(commandToExec, p.PREFIX) {
+		return strings.TrimPrefix(commandToExec, p.PREFIX)
+	}
+	return commandToExec
+}
+
+// resolveNpmSourceID finds the local package source ID for a package name, or
+// falls back to npm:<name>.
+func (p *NPMProvider) resolveNpmSourceID(packageName string) string {
+	for _, pkg := range lppGetDataForProvider("npm").Packages {
+		if p.getRepo(pkg.SourceID) == packageName {
+			return pkg.SourceID
+		}
+	}
+	return p.PREFIX + packageName
+}
+
+// packageBinMap returns symlinkName → node_modules/.bin target name.
+// Prefers the nvpm registry bin map (supports aliases like tsgo → tsc);
+// falls back to package.json bins when the registry has none.
+func (p *NPMProvider) packageBinMap(packageName string) (map[string]string, error) {
+	parser := registry_parser.NewDefaultRegistryParser()
+	registryItem := parser.GetBySourceId(p.resolveNpmSourceID(packageName))
+	if len(registryItem.Bin) > 0 {
+		bins := make(map[string]string, len(registryItem.Bin))
+		for binName, binCmd := range registryItem.Bin {
+			target := p.normalizeNpmBinCommand(binCmd)
+			if target == "" {
+				continue
+			}
+			bins[binName] = target
+		}
+		return bins, nil
+	}
+
+	packagePath := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", packageName)
 	pkg, err := p.readPackageJSON(packagePath)
 	if err != nil {
-		return fmt.Errorf("error reading package.json for %s: %v", packageName, err)
+		return nil, fmt.Errorf("error reading package.json for %s: %v", packageName, err)
 	}
-	if len(pkg.Bin) > 0 {
-		binDir := files.GetAppBinPath()
-		for binPath := range pkg.Bin {
-			actualBinPath := filepath.Join(nodeModulesPath, ".bin", binPath)
-			symlinkPath := filepath.Join(binDir, binPath)
-			if _, err := npmLstat(symlinkPath); err == nil {
-				if err := npmRemove(symlinkPath); err != nil {
-					Logger.Info(fmt.Sprintf("warning: failed to remove existing symlink %s: %v", symlinkPath, err))
-				}
+	bins := make(map[string]string, len(pkg.Bin))
+	for binName := range pkg.Bin {
+		bins[binName] = binName
+	}
+	return bins, nil
+}
+
+func (p *NPMProvider) createPackageSymlinks(packageName string) error {
+	bins, err := p.packageBinMap(packageName)
+	if err != nil {
+		return err
+	}
+	if len(bins) == 0 {
+		return nil
+	}
+	nodeModulesPath := filepath.Join(p.APP_PACKAGES_DIR, "node_modules")
+	binDir := files.GetAppBinPath()
+	for binName, targetName := range bins {
+		actualBinPath := filepath.Join(nodeModulesPath, ".bin", targetName)
+		symlinkPath := filepath.Join(binDir, binName)
+		if _, err := npmLstat(symlinkPath); err == nil {
+			if err := npmRemove(symlinkPath); err != nil {
+				Logger.Info(fmt.Sprintf("warning: failed to remove existing symlink %s: %v", symlinkPath, err))
 			}
-			Logger.Info(fmt.Sprintf("Creating symlink for %s -> %s\n", symlinkPath, actualBinPath))
-			if err := npmSymlink(actualBinPath, symlinkPath); err != nil {
-				Logger.Info(fmt.Sprintf("error creating symlink for %s: %v", binPath, err))
-				return err
-			}
-			if err := npmChmod(symlinkPath, 0755); err != nil {
-				Logger.Info(fmt.Sprintf("error setting executable permissions for %s: %v", binPath, err))
-			}
+		}
+		Logger.Info(fmt.Sprintf("Creating symlink for %s -> %s\n", symlinkPath, actualBinPath))
+		if err := npmSymlink(actualBinPath, symlinkPath); err != nil {
+			Logger.Info(fmt.Sprintf("error creating symlink for %s: %v", binName, err))
+			return err
+		}
+		if err := npmChmod(symlinkPath, 0755); err != nil {
+			Logger.Info(fmt.Sprintf("error setting executable permissions for %s: %v", binName, err))
 		}
 	}
 	return nil
 }
 
 func (p *NPMProvider) removePackageSymlinks(packageName string) error {
-	binDir := files.GetAppBinPath()
-	nodeModulesPath := filepath.Join(p.APP_PACKAGES_DIR, "node_modules")
-	packagePath := filepath.Join(nodeModulesPath, packageName)
-	pkg, err := p.readPackageJSON(packagePath)
+	bins, err := p.packageBinMap(packageName)
 	if err != nil {
 		return nil
 	}
-	for binName := range pkg.Bin {
+	binDir := files.GetAppBinPath()
+	for binName := range bins {
 		symlinkPath := filepath.Join(binDir, binName)
 		if _, err := npmLstat(symlinkPath); err == nil {
 			if err := npmRemove(symlinkPath); err != nil {

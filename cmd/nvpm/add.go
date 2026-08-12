@@ -95,7 +95,7 @@ func validatePackageArgs(args []string) error {
 
 var addCmd = &cobra.Command{
 	Use:     "add <pkgId> [pkgId...]",
-	Aliases: []string{"install"},
+	Aliases: []string{"install", "set"},
 	Short:   "Adds one or more packages",
 	Long: `Adds one or more packages from supported providers.
 
@@ -119,7 +119,8 @@ Examples:
   nvpm install cargo:ripgrep@13.0.0 npm:prettier
   nvpm install github:sharkdp/bat
   nvpm install gitlab:group/subgroup/myproject@v1.0.0
-  nvpm install codeberg:user/repo`,
+  nvpm install codeberg:user/repo
+  nvpm set kulala.nvim@v6.0.0`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		return validatePackageArgs(args)
 	},

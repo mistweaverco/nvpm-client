@@ -645,4 +645,27 @@ func TestUpdateCommandFullOutputGolden(t *testing.T) {
 		assert.Contains(t, allOutput, "[✗] Failed to update pypi:black")
 		assert.Contains(t, allOutput, "Some packages failed to update.")
 	})
+
+	t.Run("skips pinned versions instead of falsely succeeding", func(t *testing.T) {
+		out := &MockOutputWriter{}
+		prevUpdateService := newUpdateService
+		newUpdateService = func() *UpdateService {
+			return NewUpdateServiceWithDependencies(
+				&MockLocalPackagesProvider{},
+				&MockRegistryProvider{},
+				&MockUpdateChecker{},
+				out,
+			)
+		}
+		defer func() { newUpdateService = prevUpdateService }()
+
+		upCmd.Run(upCmd, []string{"kulala.nvim@v6.0.0", "github:mistweaverco/kulala.nvim@v6.0.0"})
+
+		allOutput := strings.Join(out.Output, "\n")
+		assert.Contains(t, allOutput, "cannot target a specific version")
+		assert.Contains(t, allOutput, "nvpm add kulala.nvim@v6.0.0")
+		assert.Contains(t, allOutput, "nvpm set")
+		assert.Contains(t, allOutput, "No packages updated.")
+		assert.NotContains(t, allOutput, "Successfully updated")
+	})
 }

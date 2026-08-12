@@ -140,7 +140,10 @@ Examples:
   nvpm up pypi:black cargo:ripgrep
   nvpm up github:user/repo gitlab:group/subgroup/project
   nvpm up --all (update all installed packages)
-  nvpm up --self (update nvpm itself to the latest version)`,
+  nvpm up --self (update nvpm itself to the latest version)
+
+Note: pinned versions like pkg@v1.2.3 are not supported by up.
+Use nvpm add / nvpm set to install or switch to a specific version.`,
 	Args: cobra.MinimumNArgs(0), // Allow no args if --all or --self is used
 	// Enable shell completion for installed package IDs only.
 	ValidArgsFunction: installedPackageIDCompletion,
@@ -193,10 +196,15 @@ Examples:
 		packages := args
 		internalIDs := make([]string, 0, len(packages))
 		displayIDs := make([]string, 0, len(packages))
+		skippedPinned := make([]string, 0)
 
 		for _, userPkgID := range packages {
 			// Parse package ID and version from the user-facing ID
-			baseID, _ := parsePackageIDAndVersion(userPkgID)
+			baseID, pinnedVersion := parsePackageIDAndVersion(userPkgID)
+			if pinnedVersion != "" {
+				skippedPinned = append(skippedPinned, userPkgID)
+				continue
+			}
 
 			var internalID string
 			var displayID string
@@ -248,6 +256,13 @@ Examples:
 			displayIDs = append(displayIDs, displayID)
 		}
 
+		service := newUpdateService()
+		for _, pinned := range skippedPinned {
+			_, version := parsePackageIDAndVersion(pinned)
+			service.output.Printf("%s Skipping %s: `nvpm up` cannot target a specific version (%s).\n", IconAlert(), pinned, version)
+			service.output.Printf("  To set a specific version, use `nvpm add %s` or `nvpm set %s`.\n", pinned, pinned)
+		}
+
 		filters := getShowFilters(cmd)
 		if len(filters) > 0 {
 			filteredInternal := make([]string, 0, len(internalIDs))
@@ -263,13 +278,15 @@ Examples:
 		}
 
 		if len(internalIDs) == 0 {
-			service := newUpdateService()
+			if len(skippedPinned) > 0 {
+				service.output.Println("No packages updated.")
+				return
+			}
 			service.output.Println("No packages match the current --filter criteria")
 			return
 		}
 
 		// Update individual packages
-		service := newUpdateService()
 		service.output.Printf("Updating %d package(s) to latest versions...\n", len(internalIDs))
 
 		allSuccess := true

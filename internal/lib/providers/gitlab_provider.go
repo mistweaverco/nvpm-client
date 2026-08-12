@@ -252,9 +252,8 @@ func (p *GitLabProvider) installFromGit(sourceID, repo, version string) bool {
 	} else {
 		// Update existing repository
 		Logger.Info(fmt.Sprintf("GitLab Install: Updating repository at %s", repoPath))
-		code, err := gitlabShellOut("git", []string{"fetch", "origin"}, repoPath, nil)
-		if err != nil || code != 0 {
-			Logger.Error(fmt.Sprintf("GitLab Install: Error fetching updates: %v", err))
+		if err := gitFetchOriginTags(gitlabShellOutCapture, repoPath, sourceID, version, allowForcedTagSHAMismatch()); err != nil {
+			recordGitUpdateFailure("GitLab Install", err)
 			return false
 		}
 	}
@@ -346,27 +345,32 @@ func (p *GitLabProvider) Remove(sourceID string) bool {
 func (p *GitLabProvider) Update(sourceID string) bool {
 	repo := p.getRepo(sourceID)
 	if repo == "" {
-		Logger.Error("GitLab Update: Invalid source ID format")
+		logAndSetError("GitLab Update: Invalid source ID format")
 		return false
 	}
 
 	repoPath := p.getRepoPath(sourceID, repo)
 	if _, err := gitlabStat(repoPath); os.IsNotExist(err) {
-		Logger.Error(fmt.Sprintf("GitLab Update: Repository %s is not installed", repo))
+		logAndSetError(fmt.Sprintf("GitLab Update: Repository %s is not installed", repo))
 		return false
 	}
 
-	// Fetch latest changes
-	code, err := gitlabShellOut("git", []string{"fetch", "--tags", "origin"}, repoPath, nil)
-	if err != nil || code != 0 {
-		Logger.Error(fmt.Sprintf("GitLab Update: Error fetching updates: %v", err))
-		return false
-	}
-
-	// Get latest version (prefer-branch-over-release policy)
 	latestVersion, err := ResolveGitLatestRef(sourceID)
 	if err != nil || strings.TrimSpace(latestVersion) == "" {
 		latestVersion = p.getDefaultBranch(repo, repoPath)
+	}
+	force := allowForcedTagSHAMismatch()
+	if err := CheckGitTagSHAMismatchLive(sourceID, latestVersion); err != nil {
+		if !force {
+			SetLastError(err.Error())
+			return false
+		}
+		Logger.Info(fmt.Sprintf("GitLab Update: %v (--force accepting new commit)", err))
+	}
+
+	if err := gitFetchOriginTags(gitlabShellOutCapture, repoPath, sourceID, latestVersion, force); err != nil {
+		recordGitUpdateFailure("GitLab Update", err)
+		return false
 	}
 
 	Logger.Info(fmt.Sprintf("GitLab Update: Updating %s to version %s", repo, latestVersion))

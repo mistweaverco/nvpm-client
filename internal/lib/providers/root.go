@@ -440,6 +440,20 @@ func Install(sourceId string, version string) bool {
 		logAndSetError(err.Error())
 		return false
 	}
+	// Sync restores a pinned commit; skip live tag SHA checks in that case.
+	if strings.TrimSpace(GetLockedCommit()) == "" && IsGitHostedSourceID(sourceId) {
+		ref := strings.TrimSpace(version)
+		if ref != "" && ref != "latest" {
+			if err := CheckGitTagSHAMismatchLive(sourceId, ref); err != nil {
+				if !allowForcedTagSHAMismatch() {
+					// User-facing via TakeLastError; avoid duplicating as slog ERROR when debug is off.
+					SetLastError(err.Error())
+					return false
+				}
+				Logger.Info(fmt.Sprintf("Install: %v (--force accepting new commit)", err))
+			}
+		}
+	}
 	provider := detectProvider(sourceId)
 	switch provider {
 	case ProviderNPM:

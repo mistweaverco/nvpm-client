@@ -246,9 +246,8 @@ func (p *CodebergProvider) installFromGit(sourceID, repo, version string) bool {
 	} else {
 		// Update existing repository
 		Logger.Info(fmt.Sprintf("Codeberg Install: Updating repository at %s", repoPath))
-		code, err := codebergShellOut("git", []string{"fetch", "origin"}, repoPath, nil)
-		if err != nil || code != 0 {
-			Logger.Error(fmt.Sprintf("Codeberg Install: Error fetching updates: %v", err))
+		if err := gitFetchOriginTags(codebergShellOutCapture, repoPath, sourceID, version, allowForcedTagSHAMismatch()); err != nil {
+			recordGitUpdateFailure("Codeberg Install", err)
 			return false
 		}
 	}
@@ -339,27 +338,32 @@ func (p *CodebergProvider) Remove(sourceID string) bool {
 func (p *CodebergProvider) Update(sourceID string) bool {
 	repo := p.getRepo(sourceID)
 	if repo == "" {
-		Logger.Error("Codeberg Update: Invalid source ID format")
+		logAndSetError("Codeberg Update: Invalid source ID format")
 		return false
 	}
 
 	repoPath := p.getRepoPath(sourceID, repo)
 	if _, err := codebergStat(repoPath); os.IsNotExist(err) {
-		Logger.Error(fmt.Sprintf("Codeberg Update: Repository %s is not installed", repo))
+		logAndSetError(fmt.Sprintf("Codeberg Update: Repository %s is not installed", repo))
 		return false
 	}
 
-	// Fetch latest changes
-	code, err := codebergShellOut("git", []string{"fetch", "--tags", "origin"}, repoPath, nil)
-	if err != nil || code != 0 {
-		Logger.Error(fmt.Sprintf("Codeberg Update: Error fetching updates: %v", err))
-		return false
-	}
-
-	// Get latest version (prefer-branch-over-release policy)
 	latestVersion, err := ResolveGitLatestRef(sourceID)
 	if err != nil || strings.TrimSpace(latestVersion) == "" {
 		latestVersion = p.getDefaultBranch(repo, repoPath)
+	}
+	force := allowForcedTagSHAMismatch()
+	if err := CheckGitTagSHAMismatchLive(sourceID, latestVersion); err != nil {
+		if !force {
+			SetLastError(err.Error())
+			return false
+		}
+		Logger.Info(fmt.Sprintf("Codeberg Update: %v (--force accepting new commit)", err))
+	}
+
+	if err := gitFetchOriginTags(codebergShellOutCapture, repoPath, sourceID, latestVersion, force); err != nil {
+		recordGitUpdateFailure("Codeberg Update", err)
+		return false
 	}
 
 	Logger.Info(fmt.Sprintf("Codeberg Update: Updating %s to version %s", repo, latestVersion))

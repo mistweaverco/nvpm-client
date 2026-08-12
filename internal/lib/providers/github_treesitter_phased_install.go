@@ -250,9 +250,8 @@ func (p *GitHubProvider) gitCloneAndCheckout(sourceID, repo, version string) (re
 		}
 	} else {
 		Logger.Info(fmt.Sprintf("GitHub Install: Updating repository at %s", repoPath))
-		code, err := githubShellOut("git", []string{"fetch", "origin"}, repoPath, nil)
-		if err != nil || code != 0 {
-			Logger.Error(fmt.Sprintf("GitHub Install: Error fetching updates: %v", err))
+		if err := gitFetchOriginTags(githubShellOutCapture, repoPath, sourceID, version, allowForcedTagSHAMismatch()); err != nil {
+			recordGitUpdateFailure("GitHub Install", err)
 			return "", "", false
 		}
 	}

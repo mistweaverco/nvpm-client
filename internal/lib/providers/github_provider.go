@@ -349,27 +349,34 @@ func (p *GitHubProvider) Remove(sourceID string) bool {
 func (p *GitHubProvider) Update(sourceID string) bool {
 	repo := p.getRepo(sourceID)
 	if repo == "" {
-		Logger.Error("GitHub Update: Invalid source ID format")
+		logAndSetError("GitHub Update: Invalid source ID format")
 		return false
 	}
 
 	repoPath := p.getRepoPath(sourceID, repo)
 	if _, err := githubStat(repoPath); os.IsNotExist(err) {
-		Logger.Error(fmt.Sprintf("GitHub Update: Repository %s is not installed", repo))
+		logAndSetError(fmt.Sprintf("GitHub Update: Repository %s is not installed", repo))
 		return false
 	}
 
-	// Fetch latest changes
-	code, err := githubShellOut("git", []string{"fetch", "--tags", "origin"}, repoPath, nil)
-	if err != nil || code != 0 {
-		Logger.Error(fmt.Sprintf("GitHub Update: Error fetching updates: %v", err))
-		return false
-	}
-
-	// Get latest version (prefer-branch-over-release policy)
+	// Resolve target before fetch so we can detect force-moved tags even when
+	// `git fetch --tags` would only report a generic exit status.
 	latestVersion, err := ResolveGitLatestRef(sourceID)
 	if err != nil || strings.TrimSpace(latestVersion) == "" {
 		latestVersion = p.getDefaultBranch(repo, repoPath)
+	}
+	force := allowForcedTagSHAMismatch()
+	if err := CheckGitTagSHAMismatchLive(sourceID, latestVersion); err != nil {
+		if !force {
+			SetLastError(err.Error())
+			return false
+		}
+		Logger.Info(fmt.Sprintf("GitHub Update: %v (--force accepting new commit)", err))
+	}
+
+	if err := gitFetchOriginTags(githubShellOutCapture, repoPath, sourceID, latestVersion, force); err != nil {
+		recordGitUpdateFailure("GitHub Update", err)
+		return false
 	}
 
 	Logger.Info(fmt.Sprintf("GitHub Update: Updating %s to version %s", repo, latestVersion))

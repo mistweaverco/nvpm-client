@@ -24,8 +24,8 @@ func (e *GitTagSHAMismatchError) Error() string {
 	prev := shortCommitForError(e.PreviousCommit)
 	remote := shortCommitForError(e.RemoteCommit)
 	return fmt.Sprintf(
-		"tag/release SHA mismatch for %s@%s: previously recorded %s, remote now %s (upstream tag was force-moved). Refusing to update; re-run with --force to accept the new commit, or set the version explicitly via `nvpm add %s@%s` / `nvpm set %s@%s`",
-		e.SourceID, e.Tag, prev, remote, e.SourceID, e.Tag, e.SourceID, e.Tag,
+		"tag/release SHA mismatch for %s@%s: previously recorded %s, remote now %s (upstream tag was force-moved). Refusing to update; re-run with --force to accept the new commit.",
+		e.SourceID, e.Tag, prev, remote,
 	)
 }
 

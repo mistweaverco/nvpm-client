@@ -504,14 +504,14 @@ var (
 // isValidVersionString checks if a string looks like a valid version
 func isValidVersionString(version string) bool {
 	// Common version patterns: "1.0.0", "latest", "v1.0.0", "1.0.0-beta", etc.
-	// A version should contain at least one digit or be "latest"
+	// A version should contain at least one digit, be "latest", or a named channel/ref.
 	if version == "latest" {
 		return true
 	}
 
-	// Common git branch names users pass explicitly (mainly for VCS providers)
+	// Common git branch names and release channels users pass explicitly
 	switch strings.ToLower(version) {
-	case "main", "master", "trunk", "head":
+	case "main", "master", "trunk", "head", "nightly", "canary", "next", "stable":
 		return true
 	}
 
@@ -546,16 +546,27 @@ func parsePackageIDAndVersion(pkgId string) (string, string) {
 	parts := strings.Split(pkgId, "@")
 	if len(parts) > 1 {
 		lastPart := parts[len(parts)-1]
-		// Check if the last part looks like a version (contains digits or is "latest")
-		if isValidVersionString(lastPart) {
-			// Reconstruct the package name without the version
+		if lastPart != "" {
 			packageName := strings.Join(parts[:len(parts)-1], "@")
-			return packageName, lastPart
+			// Digits / named channels, or any git ref on github/gitlab/codeberg
+			// (e.g. github:DanielGavin/ols@nightly).
+			if isValidVersionString(lastPart) || isGitHostedRefSuffix(packageName, lastPart) {
+				return packageName, lastPart
+			}
 		}
 	}
 	// No valid version found, return the full package ID with empty version.
 	// Empty version means "use the registry default if present, otherwise provider default".
 	return pkgId, ""
+}
+
+// isGitHostedRefSuffix reports whether lastPart is a plausible git tag/branch on a
+// github/gitlab/codeberg source ID. Those refs often have no digits (nightly, release).
+func isGitHostedRefSuffix(packageName, lastPart string) bool {
+	if lastPart == "" || strings.Contains(lastPart, "/") {
+		return false
+	}
+	return providers.IsGitHostedSourceID(packageName)
 }
 
 // PackageMatch represents a package found in the registry

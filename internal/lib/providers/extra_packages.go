@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/mattn/go-isatty"
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
@@ -17,14 +18,33 @@ type extraPackage struct {
 	Provider string
 	Name     string
 	Version  string
+	Commit   string
 }
 
 // pendingExtraPackages records preflight consent keyed by normalized source ID.
-// true: install extras; false: skip them.
+// true: run extras; false: skip them.
 var pendingExtraPackages = map[string]bool{}
+
+// pendingExtraPackageResolved holds extras (with resolved versions) from preflight.
+var pendingExtraPackageResolved = map[string][]extraPackage{}
 
 var extraPackagesShellOut = shell_out.ShellOut
 var extraPackagesConfirmHook = defaultExtraPackagesConfirm
+var extraPackageResolveVersion = defaultExtraPackageResolveVersion
+var extraPackagesLockItem = local_packages_parser.GetBySourceId
+var extraPackagesSavePins = local_packages_parser.MergePackageExtraPackages
+
+// extraPackagesLastInstalled is set by ExecuteExtraPackages when extras were
+// actually installed (not skipped, declined, or absent).
+var extraPackagesLastInstalled bool
+
+// ConsumeExtraPackagesInstalledLastOp reports whether the last ExecuteExtraPackages
+// call installed extras, then clears the flag.
+func ConsumeExtraPackagesInstalledLastOp() bool {
+	v := extraPackagesLastInstalled
+	extraPackagesLastInstalled = false
+	return v
+}
 
 func extraPackagesKey(sourceID string) string {
 	return postInstallKey(sourceID)
@@ -52,7 +72,9 @@ func parseExtraPackages(item registry_parser.RegistryItem) ([]extraPackage, erro
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, extraPackage{Spec: spec, Provider: provider, Name: name, Version: version})
+		pkg := extraPackage{Spec: spec, Provider: provider, Name: name, Version: version}
+		applyExtraPackageGitSHA(&pkg)
+		out = append(out, pkg)
 	}
 	return out, nil
 }
@@ -111,6 +133,180 @@ func formatExtraPackageRef(pkg extraPackage) string {
 	return ref
 }
 
+func extraPackageID(pkg extraPackage) string {
+	return pkg.Provider + ":" + pkg.Name
+}
+
+func extraPackageLooksLikeGitSHA(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) != 40 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func extraPackageVersionsEqual(a, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if strings.EqualFold(a, b) {
+		return true
+	}
+	return strings.EqualFold(strings.TrimPrefix(a, "v"), strings.TrimPrefix(b, "v"))
+}
+
+func extraPackageCommitsEqual(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
+func applyExtraPackageGitSHA(pkg *extraPackage) {
+	if pkg.Commit == "" && extraPackageLooksLikeGitSHA(pkg.Version) {
+		pkg.Commit = pkg.Version
+	}
+}
+
+func resolveExtraPackageVersions(pkgs []extraPackage) []extraPackage {
+	out := make([]extraPackage, len(pkgs))
+	copy(out, pkgs)
+	for i := range out {
+		if out[i].Version == "" || strings.EqualFold(out[i].Version, "latest") {
+			if ver, err := extraPackageResolveVersion(out[i].Provider, out[i].Name); err == nil {
+				ver = strings.TrimSpace(ver)
+				if ver != "" && !strings.EqualFold(ver, "latest") {
+					out[i].Version = ver
+				}
+			}
+		}
+		applyExtraPackageGitSHA(&out[i])
+	}
+	return out
+}
+
+func extraPackagesToPins(pkgs []extraPackage) []local_packages_parser.ExtraPackagePin {
+	pins := make([]local_packages_parser.ExtraPackagePin, 0, len(pkgs))
+	for _, pkg := range pkgs {
+		pins = append(pins, local_packages_parser.ExtraPackagePin{
+			ID:      extraPackageID(pkg),
+			Version: pkg.Version,
+			Commit:  pkg.Commit,
+		})
+	}
+	return pins
+}
+
+func extraPackageMatchesPin(pkg extraPackage, pin local_packages_parser.ExtraPackagePin) bool {
+	if normalizePackageID(extraPackageID(pkg)) != normalizePackageID(pin.ID) {
+		return false
+	}
+	if pkg.Version != "" && strings.TrimSpace(pin.Version) != "" && !extraPackageVersionsEqual(pkg.Version, pin.Version) {
+		return false
+	}
+	if pkg.Commit != "" && strings.TrimSpace(pin.Commit) != "" && !extraPackageCommitsEqual(pkg.Commit, pin.Commit) {
+		return false
+	}
+	return true
+}
+
+func extraPackagesCoveredByLock(sourceID string, desired []extraPackage) bool {
+	if len(desired) == 0 {
+		return true
+	}
+	item := extraPackagesLockItem(sourceID)
+	if item.Extras == nil || len(item.Extras.ExtraPackages) == 0 {
+		return false
+	}
+	byID := make(map[string]local_packages_parser.ExtraPackagePin, len(item.Extras.ExtraPackages))
+	for _, pin := range item.Extras.ExtraPackages {
+		id := normalizePackageID(strings.TrimSpace(pin.ID))
+		if id == "" {
+			continue
+		}
+		byID[id] = pin
+	}
+	for _, pkg := range desired {
+		pin, ok := byID[normalizePackageID(extraPackageID(pkg))]
+		if !ok || !extraPackageMatchesPin(pkg, pin) {
+			return false
+		}
+	}
+	return true
+}
+
+func defaultExtraPackageResolveVersion(provider, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", nil
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "npm":
+		return NewProviderNPM().getLatestVersion(name)
+	case "pypi":
+		return NewProviderPyPi().getLatestVersion(name)
+	case "gem":
+		return NewProviderGem().getLatestVersion(name)
+	case "composer":
+		return NewProviderComposer().getLatestVersion(name)
+	case "luarocks":
+		return NewProviderLuaRocks().getLatestVersion(name)
+	case "nuget":
+		return NewProviderNuGet().getLatestVersion(name)
+	case "opam":
+		return NewProviderOpam().getLatestVersion(name)
+	case "golang":
+		return NewProviderGolang().getLatestVersion(name)
+	case "cargo":
+		return NewProviderCargo().getLatestVersion(name)
+	case "github":
+		return NewProviderGitHub().getLatestVersion(name)
+	case "gitlab":
+		return NewProviderGitLab().getLatestVersion(name)
+	case "codeberg":
+		return NewProviderCodeberg().getLatestVersion(name)
+	default:
+		return "", nil
+	}
+}
+
+// RegistryHasInstallHooks reports whether the registry item for sourceID has
+// extra_packages or a post-install script that should run after install/update.
+func RegistryHasInstallHooks(sourceID string) bool {
+	item := postInstallRegistryParser().GetBySourceId(sourceID)
+	if item.PostInstallRun() != "" {
+		return true
+	}
+	pkgs, err := parseExtraPackages(item)
+	return err == nil && len(pkgs) > 0
+}
+
+// StubExtraPackageInstallForTest replaces extra-package shell-out, version
+// resolution, and confirm. Call the returned restore function from t.Cleanup.
+func StubExtraPackageInstallForTest(
+	shellOut func(cmd string, args []string, dir string, env []string) (int, error),
+	resolve func(provider, name string) (string, error),
+) (restore func()) {
+	oldShell := extraPackagesShellOut
+	oldResolve := extraPackageResolveVersion
+	oldConfirm := extraPackagesConfirmHook
+	if shellOut != nil {
+		extraPackagesShellOut = shellOut
+	}
+	if resolve != nil {
+		extraPackageResolveVersion = resolve
+	}
+	extraPackagesConfirmHook = func(string, []extraPackage) (bool, error) {
+		return true, nil
+	}
+	return func() {
+		extraPackagesShellOut = oldShell
+		extraPackageResolveVersion = oldResolve
+		extraPackagesConfirmHook = oldConfirm
+	}
+}
+
 // PreflightRegistryInstallHooks confirms extra packages then post-install before
 // the install spinner. Always-trusted packages skip prompts.
 func PreflightRegistryInstallHooks(item registry_parser.RegistryItem) error {
@@ -137,7 +333,8 @@ func ExecuteRegistryInstallHooks(sourceID string) error {
 }
 
 // PreflightExtraPackages asks to install registry extra_packages before the
-// install spinner. Always-trusted packages skip the prompt and are approved.
+// install spinner. Always-trusted packages and extras already recorded in the
+// lock (same id/version/commit) skip the prompt and are approved.
 func PreflightExtraPackages(item registry_parser.RegistryItem) error {
 	pkgs, err := parseExtraPackages(item)
 	if err != nil {
@@ -150,7 +347,9 @@ func PreflightExtraPackages(item registry_parser.RegistryItem) error {
 	if sourceID == "" {
 		return nil
 	}
-	if PackageAlwaysTrust(sourceID) {
+	pkgs = resolveExtraPackageVersions(pkgs)
+	pendingExtraPackageResolved[sourceID] = pkgs
+	if PackageAlwaysTrust(sourceID) || extraPackagesCoveredByLock(sourceID, pkgs) {
 		pendingExtraPackages[sourceID] = true
 		return nil
 	}
@@ -165,7 +364,9 @@ func PreflightExtraPackages(item registry_parser.RegistryItem) error {
 // ExecuteExtraPackages installs source.extra_packages into the parent package
 // container after a successful install/update. They are not added as separate
 // nvpm lock packages. Consent comes from PreflightExtraPackages when present.
+// Successful installs are recorded on the parent lock extras.extra_packages.
 func ExecuteExtraPackages(sourceID string) error {
+	extraPackagesLastInstalled = false
 	item := postInstallRegistryParser().GetBySourceId(sourceID)
 	pkgs, err := parseExtraPackages(item)
 	if err != nil {
@@ -175,10 +376,16 @@ func ExecuteExtraPackages(sourceID string) error {
 		return nil
 	}
 	key := extraPackagesKey(sourceID)
+	if resolved, ok := pendingExtraPackageResolved[key]; ok {
+		pkgs = resolved
+		delete(pendingExtraPackageResolved, key)
+	} else {
+		pkgs = resolveExtraPackageVersions(pkgs)
+	}
 	allowed, decided := pendingExtraPackages[key]
 	delete(pendingExtraPackages, key)
 	if !decided {
-		if PackageAlwaysTrust(key) {
+		if PackageAlwaysTrust(key) || extraPackagesCoveredByLock(key, pkgs) {
 			allowed = true
 		} else {
 			ok, confirmErr := extraPackagesConfirmHook(key, pkgs)
@@ -190,6 +397,7 @@ func ExecuteExtraPackages(sourceID string) error {
 	}
 	if !allowed {
 		Logger.Info(fmt.Sprintf("extra-packages: skipping extras for %s (not confirmed)", key))
+		_ = extraPackagesSavePins(key, nil)
 		return nil
 	}
 	dir := packageInstallDir(sourceID)
@@ -202,9 +410,14 @@ func ExecuteExtraPackages(sourceID string) error {
 	for _, pkg := range pkgs {
 		Logger.Info(fmt.Sprintf("extra-packages: installing %s into %s", formatExtraPackageRef(pkg), dir))
 		if err := installExtraPackage(sourceID, dir, pkg); err != nil {
+			_ = extraPackagesSavePins(key, nil)
 			return err
 		}
 	}
+	if err := extraPackagesSavePins(key, extraPackagesToPins(pkgs)); err != nil {
+		return fmt.Errorf("extra-packages: record lock extras for %s: %w", key, err)
+	}
+	extraPackagesLastInstalled = true
 	return nil
 }
 

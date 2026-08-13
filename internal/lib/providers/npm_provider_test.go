@@ -750,6 +750,26 @@ func TestFirstNonNoticeLine(t *testing.T) {
 	assert.Equal(t, "", firstNonNoticeLine(""))
 }
 
+func TestNPMWritePackageJSONIncludesLockExtras(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderNPM()
+	dir := p.packageDir("svelte-language-server")
+	assert.NoError(t, os.MkdirAll(dir, 0755))
+	extras := &local_packages_parser.PackageExtras{
+		ExtraPackages: []local_packages_parser.ExtraPackagePin{
+			{ID: "npm:typescript-svelte-plugin", Version: "0.3.52"},
+			{ID: "npm:@astrojs/ts-plugin"},
+		},
+	}
+	assert.True(t, p.writePackageJSON(dir, "svelte-language-server", "0.18.3", extras))
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	assert.NoError(t, err)
+	body := string(data)
+	assert.Contains(t, body, `"svelte-language-server": "0.18.3"`)
+	assert.Contains(t, body, `"typescript-svelte-plugin": "0.3.52"`)
+	assert.Contains(t, body, `"@astrojs/ts-plugin": "*"`)
+}
+
 func TestNPMPerPackageIsolationAndBinTargets(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()

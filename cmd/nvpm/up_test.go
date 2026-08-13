@@ -1,12 +1,18 @@
 package nvpm
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/providers"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // MockRegistryProvider and MockUpdateChecker are defined in list_test.go
@@ -668,4 +674,165 @@ func TestUpdateCommandFullOutputGolden(t *testing.T) {
 		assert.Contains(t, allOutput, "No packages updated.")
 		assert.NotContains(t, allOutput, "Successfully updated")
 	})
+}
+
+func TestUpdateAllPackagesDoesNotInstallExtrasWhenUpToDate(t *testing.T) {
+	sourceID := setupUpExtraPackagesFixture(t, "2.5.0")
+	out := &MockOutputWriter{}
+	svc := NewUpdateServiceWithDependencies(
+		&defaultLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionFunc:  func(string) string { return "2.5.0" },
+			GetLatestVersionsFunc: func(string) (string, string) { return "2.5.0", "" },
+		},
+		&MockUpdateChecker{
+			CheckIfUpdateIsAvailableFunc: func(string, string) (bool, string) { return false, "" },
+		},
+		out,
+	)
+	assert.True(t, svc.UpdateAllPackages())
+	lock := local_packages_parser.GetBySourceId(sourceID)
+	if lock.Extras != nil {
+		assert.Empty(t, lock.Extras.ExtraPackages)
+	}
+	assert.NotContains(t, strings.Join(out.Output, "\n"), "Extra packages installed for "+sourceID)
+}
+
+func TestUpdateAllPackagesRecordsExtraPackagesOnUpdate(t *testing.T) {
+	sourceID := setupUpExtraPackagesFixture(t, "2.4.0")
+	mockFactory := &providers.MockProviderFactory{
+		MockNPMProvider: &providers.MockPackageManager{
+			UpdateFunc: func(id string) bool {
+				_ = local_packages_parser.AddLocalPackage(id, "2.5.0")
+				return true
+			},
+		},
+	}
+	providers.SetProviderFactory(mockFactory)
+	t.Cleanup(providers.ResetProviderFactory)
+
+	out := &MockOutputWriter{}
+	svc := NewUpdateServiceWithDependencies(
+		&defaultLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionFunc:  func(string) string { return "2.5.0" },
+			GetLatestVersionsFunc: func(string) (string, string) { return "2.5.0", "" },
+		},
+		&MockUpdateChecker{
+			CheckIfUpdateIsAvailableFunc: func(string, string) (bool, string) { return true, "Update available" },
+		},
+		out,
+	)
+	assert.True(t, svc.UpdateAllPackages())
+	lock := local_packages_parser.GetBySourceId(sourceID)
+	require.NotNil(t, lock.Extras)
+	assert.Equal(t, []local_packages_parser.ExtraPackagePin{
+		{ID: "npm:@astrojs/ts-plugin", Version: "1.2.3"},
+		{ID: "npm:typescript", Version: "6.0.3"},
+	}, lock.Extras.ExtraPackages)
+	assert.Contains(t, strings.Join(out.Output, "\n"), "Extra packages installed for "+sourceID)
+}
+
+func TestUpdateAllPackagesDoesNotInstallExtrasWhenUpdateSkipped(t *testing.T) {
+	sourceID := setupUpExtraPackagesFixture(t, "2.4.0")
+	mockFactory := &providers.MockProviderFactory{
+		MockNPMProvider: &providers.MockPackageManager{
+			UpdateFunc: func(string) bool {
+				providers.SetLastSkip("waiting for min-release-age")
+				return false
+			},
+		},
+	}
+	providers.SetProviderFactory(mockFactory)
+	t.Cleanup(providers.ResetProviderFactory)
+
+	out := &MockOutputWriter{}
+	svc := NewUpdateServiceWithDependencies(
+		&defaultLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionFunc:  func(string) string { return "2.5.0" },
+			GetLatestVersionsFunc: func(string) (string, string) { return "2.5.0", "" },
+		},
+		&MockUpdateChecker{
+			CheckIfUpdateIsAvailableFunc: func(string, string) (bool, string) { return true, "Update available" },
+		},
+		out,
+	)
+	assert.True(t, svc.UpdateAllPackages())
+	lock := local_packages_parser.GetBySourceId(sourceID)
+	assert.Equal(t, "2.4.0", lock.Version)
+	if lock.Extras != nil {
+		assert.Empty(t, lock.Extras.ExtraPackages)
+	}
+	allOutput := strings.Join(out.Output, "\n")
+	assert.Contains(t, allOutput, "Skipped "+sourceID)
+	assert.NotContains(t, allOutput, "Extra packages installed for "+sourceID)
+}
+
+func TestUpdateSinglePackageDoesNotInstallExtrasWhenUpToDate(t *testing.T) {
+	sourceID := setupUpExtraPackagesFixture(t, "2.5.0")
+	out := &MockOutputWriter{}
+	prev := newUpdateService
+	newUpdateService = func() *UpdateService {
+		return NewUpdateServiceWithDependencies(
+			&defaultLocalPackagesProvider{},
+			&MockRegistryProvider{
+				GetLatestVersionFunc:  func(string) string { return "2.5.0" },
+				GetLatestVersionsFunc: func(string) (string, string) { return "2.5.0", "" },
+			},
+			&MockUpdateChecker{
+				CheckIfUpdateIsAvailableFunc: func(string, string) (bool, string) { return false, "" },
+			},
+			out,
+		)
+	}
+	t.Cleanup(func() { newUpdateService = prev })
+	_ = upCmd.Flags().Set("all", "false")
+
+	upCmd.Run(upCmd, []string{sourceID})
+	lock := local_packages_parser.GetBySourceId(sourceID)
+	if lock.Extras != nil {
+		assert.Empty(t, lock.Extras.ExtraPackages)
+	}
+	assert.NotContains(t, strings.Join(out.Output, "\n"), "Extra packages installed for "+sourceID)
+}
+
+func setupUpExtraPackagesFixture(t *testing.T, installedVersion string) string {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NVPM_HOME", t.TempDir())
+	t.Setenv("NVPM_CACHE", t.TempDir())
+	cfg.Flags.MinReleaseAge = 0
+	oldDownload := downloadAndUnzipRegistryFn
+	downloadAndUnzipRegistryFn = func() (bool, error) { return false, nil }
+	t.Cleanup(func() { downloadAndUnzipRegistryFn = oldDownload })
+
+	sourceID := "npm:@astrojs/language-server"
+	require.NoError(t, local_packages_parser.AddLocalPackage(sourceID, installedVersion))
+
+	items := []registry_parser.RegistryItem{{
+		Name:    "astro-language-server",
+		Version: "2.5.0",
+		Source: registry_parser.RegistryItemSource{
+			ID:            sourceID,
+			ExtraPackages: []string{"npm:typescript@6.0.3", "npm:@astrojs/ts-plugin"},
+		},
+	}}
+	data, err := json.Marshal(items)
+	require.NoError(t, err)
+	regPath := files.GetAppRegistryFilePath()
+	require.NoError(t, os.MkdirAll(filepath.Dir(regPath), 0755))
+	require.NoError(t, os.WriteFile(regPath, data, 0644))
+
+	restore := providers.StubExtraPackageInstallForTest(
+		func(string, []string, string, []string) (int, error) { return 0, nil },
+		func(provider, name string) (string, error) {
+			if name == "@astrojs/ts-plugin" {
+				return "1.2.3", nil
+			}
+			return "", nil
+		},
+	)
+	t.Cleanup(restore)
+	return sourceID
 }

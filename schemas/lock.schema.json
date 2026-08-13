@@ -163,6 +163,32 @@
               "always_trust": {
                 "type": "boolean",
                 "description": "When true, skip min-release-age for this package on install/update. Unlike --force, this persists in the lock file."
+              },
+              "extra_packages": {
+                "type": "array",
+                "description": "Extra packages installed into this package's container after confirmation. Re-prompt when an extra's id, version, or git commit differs from what is recorded here.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["id"],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Provider-prefixed package id, e.g. \"npm:typescript\"."
+                    },
+                    "version": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Installed extra package version."
+                    },
+                    "commit": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Resolved git commit SHA when the extra package is git-hosted."
+                    }
+                  }
+                }
               }
             }
           }

@@ -157,10 +157,10 @@ func (p *GitHubProvider) installFromRelease(sourceID, repo, version string, regi
 
 	// Resolve version
 	resolvedVersion := version
-	// Branch-like versions don't map to GitHub Releases. Treat them as "latest" for
-	// release-asset installs so we don't fall back to cloning and pollute the bin dir.
-	switch resolvedVersion {
-	case "main", "master", "trunk":
+	// Placeholder branch names (main/master/…) are not GitHub Release tags.
+	// Named pre-releases such as "nightly" are real tags and must be kept:
+	// https://github.com/DanielGavin/ols/releases/tag/nightly
+	if IsGenericDefaultBranchAlias(resolvedVersion) {
 		resolvedVersion = "latest"
 	}
 
@@ -190,8 +190,8 @@ func (p *GitHubProvider) installFromRelease(sourceID, repo, version string, regi
 		return false
 	}
 
-	// Create temporary directory for extraction
-	tempDir := filepath.Join(p.APP_PACKAGES_DIR, repo+"_temp")
+	// Flatten owner/repo so we do not leave nested owner directories like packages/github/DanielGavin/.
+	tempDir := filepath.Join(p.APP_PACKAGES_DIR, strings.ReplaceAll(repo, "/", "_")+"_temp")
 	if err := githubMkdirAll(tempDir, 0755); err != nil {
 		Logger.Error(fmt.Sprintf("GitHub Install: Error creating temp directory: %v", err))
 		return false
@@ -353,6 +353,11 @@ func (p *GitHubProvider) Update(sourceID string) bool {
 		return false
 	}
 
+	registryItem := githubRegistryParser().GetBySourceId(sourceID)
+	if len(registryItem.Source.Asset) > 0 {
+		return p.updateFromRelease(sourceID, repo, registryItem)
+	}
+
 	repoPath := p.getRepoPath(sourceID, repo)
 	if _, err := githubStat(repoPath); os.IsNotExist(err) {
 		logAndSetError(fmt.Sprintf("GitHub Update: Repository %s is not installed", repo))
@@ -381,6 +386,18 @@ func (p *GitHubProvider) Update(sourceID string) bool {
 	}
 
 	Logger.Info(fmt.Sprintf("GitHub Update: Updating %s to version %s", repo, latestVersion))
+	return p.Install(sourceID, latestVersion)
+}
+
+func (p *GitHubProvider) updateFromRelease(sourceID, repo string, registryItem registry_parser.RegistryItem) bool {
+	latestVersion, err := resolveReleaseUpdateVersion(sourceID, registryItem.Version, func() (string, error) {
+		return p.getLatestReleaseTag(repo)
+	})
+	if err != nil || strings.TrimSpace(latestVersion) == "" {
+		logAndSetError(fmt.Sprintf("GitHub Update: Could not determine latest release for %s: %v", repo, err))
+		return false
+	}
+	Logger.Info(fmt.Sprintf("GitHub Update: Updating %s to release %s", repo, latestVersion))
 	return p.Install(sourceID, latestVersion)
 }
 
@@ -572,7 +589,7 @@ func (p *GitHubProvider) downloadAsset(url, destPath string) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP error: %d", resp.StatusCode)
+		return fmt.Errorf("HTTP error: %d for %s", resp.StatusCode, url)
 	}
 
 	file, err := os.Create(destPath)

@@ -41,6 +41,16 @@ type PackageExtras struct {
 	UpdateResolution *LockUpdateResolution `json:"update_resolution,omitempty"`
 	// AlwaysTrust skips min-release-age for this package on add/up (persisted; unlike --force).
 	AlwaysTrust bool `json:"always_trust,omitempty"`
+	// ExtraPackages records extras installed into this package's container after confirmation.
+	// Clients skip re-prompting while id/version/commit still match the registry extra_packages list.
+	ExtraPackages []ExtraPackagePin `json:"extra_packages,omitempty"`
+}
+
+// ExtraPackagePin records an extra package installed into the parent package container.
+type ExtraPackagePin struct {
+	ID      string `json:"id"`
+	Version string `json:"version,omitempty"`
+	Commit  string `json:"commit,omitempty"`
 }
 
 // LockUpdateResolution mirrors config git.update-resolution for lock file persistence.
@@ -555,6 +565,75 @@ func (lpp *LocalPackagesParser) MergePackageUpdateResolution(sourceID string, re
 	return nil
 }
 
+// MergePackageExtraPackages replaces extras.extra_packages for an installed package.
+// An empty pins list clears the recorded extras.
+func (lpp *LocalPackagesParser) MergePackageExtraPackages(sourceID string, pins []ExtraPackagePin) error {
+	sourceID = normalizePackageID(sourceID)
+	if sourceID == "" {
+		return nil
+	}
+	root := lpp.GetData(false)
+	for i := range root.Packages {
+		if root.Packages[i].SourceID != sourceID {
+			continue
+		}
+		normalized := normalizeExtraPackagePins(pins)
+		if len(normalized) == 0 {
+			if root.Packages[i].Extras != nil {
+				root.Packages[i].Extras.ExtraPackages = nil
+				if packageExtrasEmpty(root.Packages[i].Extras) {
+					root.Packages[i].Extras = nil
+				}
+			}
+		} else {
+			if root.Packages[i].Extras == nil {
+				root.Packages[i].Extras = &PackageExtras{}
+			}
+			root.Packages[i].Extras.ExtraPackages = normalized
+		}
+		root.Schema = lockSchemaURL
+		localPackagesFile := lpp.fileManager.GetAppLocalPackagesFilePath()
+		jsonData, err := marshalIndent(root, "", "  ")
+		if err != nil {
+			return err
+		}
+		return lpp.fileManager.WriteFile(localPackagesFile, jsonData, 0644)
+	}
+	if len(normalizeExtraPackagePins(pins)) == 0 {
+		return nil
+	}
+	return fmt.Errorf("cannot record extras: package %s is not in the lock file", sourceID)
+}
+
+func normalizeExtraPackagePins(pins []ExtraPackagePin) []ExtraPackagePin {
+	if len(pins) == 0 {
+		return nil
+	}
+	byID := make(map[string]ExtraPackagePin, len(pins))
+	for _, p := range pins {
+		id := normalizePackageID(strings.TrimSpace(p.ID))
+		if id == "" {
+			continue
+		}
+		byID[id] = ExtraPackagePin{
+			ID:      id,
+			Version: strings.TrimSpace(p.Version),
+			Commit:  strings.TrimSpace(p.Commit),
+		}
+	}
+	if len(byID) == 0 {
+		return nil
+	}
+	out := make([]ExtraPackagePin, 0, len(byID))
+	for _, p := range byID {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].ID) < strings.ToLower(out[j].ID)
+	})
+	return out
+}
+
 // MergePackageAlwaysTrust sets or clears extras.always_trust for an installed package.
 func (lpp *LocalPackagesParser) MergePackageAlwaysTrust(sourceID string, trust bool) error {
 	sourceID = normalizePackageID(sourceID)
@@ -600,7 +679,8 @@ func packageExtrasEmpty(e *PackageExtras) bool {
 		len(e.TreeSitterQueryChoices) == 0 &&
 		len(e.TreeSitterExternalQueries) == 0 &&
 		e.UpdateResolution == nil &&
-		!e.AlwaysTrust
+		!e.AlwaysTrust &&
+		len(e.ExtraPackages) == 0
 }
 
 func (lpp *LocalPackagesParser) IsNeovimPlugin(sourceID string) bool {
@@ -762,6 +842,10 @@ func MergePackageUpdateResolution(sourceId string, resolution *LockUpdateResolut
 
 func MergePackageAlwaysTrust(sourceId string, trust bool) error {
 	return globalParser.MergePackageAlwaysTrust(sourceId, trust)
+}
+
+func MergePackageExtraPackages(sourceId string, pins []ExtraPackagePin) error {
+	return globalParser.MergePackageExtraPackages(sourceId, pins)
 }
 
 func IsNeovimPlugin(sourceId string) bool {

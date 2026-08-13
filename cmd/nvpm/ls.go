@@ -1766,6 +1766,20 @@ func (ls *ListService) checkUpdateAvailability(sourceID, currentVersion, install
 // the cached remote_latest entry for packages not present in the registry.
 func resolveUpdateCandidates(registry RegistryProvider, sourceID string) (stable, prerelease, remoteCommit string) {
 	item := getRegistryItem(registry, sourceID)
+	// Release-asset packages must track GitHub/GitLab/Codeberg *releases*, not git tags.
+	// /releases/latest skips pre-releases (ols `nightly`); some git tags also have no assets.
+	if len(item.Source.Asset) > 0 {
+		if tag, err := providers.LatestReleaseTagForSource(sourceID); err == nil {
+			if v := strings.TrimSpace(tag); v != "" {
+				return v, "", ""
+			}
+		}
+		stable, prerelease = registry.GetLatestVersions(sourceID)
+		if strings.TrimSpace(stable) == "" {
+			stable = item.Version
+		}
+		return stable, prerelease, ""
+	}
 	if item.Git != nil && len(item.Git.Refs) > 0 {
 		if result, _, ok := providers.ResolveGitLatestFromRegistry(item, providers.PreferBranchPolicyForSourceID(sourceID)); ok {
 			return result.Version, "", result.Commit

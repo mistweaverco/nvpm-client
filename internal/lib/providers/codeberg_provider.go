@@ -342,6 +342,19 @@ func (p *CodebergProvider) Update(sourceID string) bool {
 		return false
 	}
 
+	registryItem := codebergRegistryParser().GetBySourceId(sourceID)
+	if len(registryItem.Source.Asset) > 0 {
+		latestVersion, err := resolveReleaseUpdateVersion(sourceID, registryItem.Version, func() (string, error) {
+			return p.getLatestReleaseTag(repo)
+		})
+		if err != nil || strings.TrimSpace(latestVersion) == "" {
+			logAndSetError(fmt.Sprintf("Codeberg Update: Could not determine latest release for %s: %v", repo, err))
+			return false
+		}
+		Logger.Info(fmt.Sprintf("Codeberg Update: Updating %s to release %s", repo, latestVersion))
+		return p.Install(sourceID, latestVersion)
+	}
+
 	repoPath := p.getRepoPath(sourceID, repo)
 	if _, err := codebergStat(repoPath); os.IsNotExist(err) {
 		logAndSetError(fmt.Sprintf("Codeberg Update: Repository %s is not installed", repo))

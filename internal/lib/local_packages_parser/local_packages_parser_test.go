@@ -569,6 +569,71 @@ func TestLocalPackagesParserWithMock(t *testing.T) {
 		_ = json.Unmarshal(written, &saved)
 		assert.Nil(t, saved.Packages[0].Extras)
 	})
+
+	t.Run("merge package extra_packages sets and clears", func(t *testing.T) {
+		existingData := LocalPackageRoot{
+			Packages: []LocalPackageItem{
+				{SourceID: "npm:@astrojs/language-server", Version: "2.0.0"},
+			},
+		}
+		jsonData, _ := json.Marshal(existingData)
+
+		var written []byte
+		mockFileManager := &MockFileManager{
+			GetAppLocalPackagesFilePathFunc: func() string { return "/mock/path/local-packages.json" },
+			FileExistsFunc:                  func(path string) bool { return true },
+			ReadFileFunc: func(path string) ([]byte, error) {
+				if written != nil {
+					return written, nil
+				}
+				return jsonData, nil
+			},
+			WriteFileFunc: func(path string, data []byte, perm uint32) error { written = data; return nil },
+		}
+
+		parser := NewWithFileManager(mockFileManager)
+		err := parser.MergePackageExtraPackages("npm:@astrojs/language-server", []ExtraPackagePin{
+			{ID: "npm:typescript", Version: "6.0.3"},
+			{ID: "npm:@astrojs/ts-plugin"},
+		})
+		assert.NoError(t, err)
+
+		var saved LocalPackageRoot
+		_ = json.Unmarshal(written, &saved)
+		if assert.NotNil(t, saved.Packages[0].Extras) {
+			assert.Equal(t, []ExtraPackagePin{
+				{ID: "npm:@astrojs/ts-plugin"},
+				{ID: "npm:typescript", Version: "6.0.3"},
+			}, saved.Packages[0].Extras.ExtraPackages)
+		}
+
+		err = parser.MergePackageExtraPackages("npm:@astrojs/language-server", nil)
+		assert.NoError(t, err)
+		saved = LocalPackageRoot{}
+		_ = json.Unmarshal(written, &saved)
+		assert.Nil(t, saved.Packages[0].Extras)
+	})
+
+	t.Run("merge package extra_packages errors when package is missing", func(t *testing.T) {
+		existingData := LocalPackageRoot{
+			Packages: []LocalPackageItem{
+				{SourceID: "npm:other", Version: "1.0.0"},
+			},
+		}
+		jsonData, _ := json.Marshal(existingData)
+		mockFileManager := &MockFileManager{
+			GetAppLocalPackagesFilePathFunc: func() string { return "/mock/path/local-packages.json" },
+			FileExistsFunc:                  func(path string) bool { return true },
+			ReadFileFunc:                    func(path string) ([]byte, error) { return jsonData, nil },
+			WriteFileFunc:                   func(path string, data []byte, perm uint32) error { return nil },
+		}
+		parser := NewWithFileManager(mockFileManager)
+		err := parser.MergePackageExtraPackages("npm:svelte-language-server", []ExtraPackagePin{
+			{ID: "npm:typescript-svelte-plugin", Version: "0.3.52"},
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not in the lock file")
+	})
 }
 
 func TestMockFileManager(t *testing.T) {

@@ -25,6 +25,57 @@ func IsGitCommitHash(s string) bool {
 	return true
 }
 
+// resolveReleaseUpdateVersion picks the GitHub/GitLab/Codeberg *release* tag to install
+// on `nvpm up`. Prefers /releases/latest (stable; skips pre-releases). Git branch
+// aliases and channel names like nightly must not be used as the automatic latest
+// when the Releases API is unavailable - those are explicit install pins, not updates.
+func resolveReleaseUpdateVersion(sourceID, registryVersion string, latestReleaseTag func() (string, error)) (string, error) {
+	if latestReleaseTag != nil {
+		if tag, err := latestReleaseTag(); err == nil {
+			if v := strings.TrimSpace(tag); v != "" && !strings.EqualFold(v, "latest") {
+				return v, nil
+			}
+		}
+	}
+	if v := strings.TrimSpace(registryVersion); v != "" && !strings.EqualFold(v, "latest") && !isNonReleaseGitRef(v) {
+		return v, nil
+	}
+	latest, err := ResolveGitLatestRef(sourceID)
+	if err == nil {
+		if v := strings.TrimSpace(latest); v != "" && !strings.EqualFold(v, "latest") && !isNonReleaseGitRef(v) {
+			return v, nil
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("could not determine latest release for %s", sourceID)
+}
+
+func isNonReleaseGitRef(version string) bool {
+	switch strings.ToLower(strings.TrimSpace(version)) {
+	case "main", "master", "trunk", "nightly", "latest", "head":
+		return true
+	default:
+		return false
+	}
+}
+
+// LatestReleaseTagForSource returns the host's latest GitHub/GitLab/Codeberg release tag.
+func LatestReleaseTagForSource(sourceID string) (string, error) {
+	id := normalizePackageID(strings.TrimSpace(sourceID))
+	switch detectProvider(id) {
+	case ProviderGitHub:
+		return NewProviderGitHub().getLatestReleaseTag(strings.TrimPrefix(id, "github:"))
+	case ProviderGitLab:
+		return NewProviderGitLab().getLatestReleaseTag(strings.TrimPrefix(id, "gitlab:"))
+	case ProviderCodeberg:
+		return NewProviderCodeberg().getLatestReleaseTag(strings.TrimPrefix(id, "codeberg:"))
+	default:
+		return "", fmt.Errorf("no release API for %s", sourceID)
+	}
+}
+
 // gitWorkTreeExists reports whether path looks like a git working tree (has .git).
 // Release-asset installs are plain directories; sync must not treat them as clones.
 func gitWorkTreeExists(path string) bool {

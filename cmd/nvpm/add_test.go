@@ -88,6 +88,9 @@ func TestParsePackageIDAndVersion(t *testing.T) {
 
 		// Special version cases
 		{"package with latest version", "pkg:npm/eslint@latest", "pkg:npm/eslint", "latest"},
+		{"github release channel nightly", "github:DanielGavin/ols@nightly", "github:DanielGavin/ols", "nightly"},
+		{"github branch without digits", "github:user/repo@release", "github:user/repo", "release"},
+		{"npm nightly dist-tag", "npm:eslint@nightly", "npm:eslint", "nightly"},
 		{"package with beta version", "pkg:npm/eslint@1.0.0-beta", "pkg:npm/eslint", "1.0.0-beta"},
 		{"package with alpha version", "pkg:npm/eslint@1.0.0-alpha.1", "pkg:npm/eslint", "1.0.0-alpha.1"},
 		{"package with rc version", "pkg:npm/eslint@1.0.0-rc.1", "pkg:npm/eslint", "1.0.0-rc.1"},
@@ -486,6 +489,8 @@ func TestIsValidVersionString(t *testing.T) {
 	}{
 		// Valid versions
 		{"latest", "latest", true},
+		{"nightly channel", "nightly", true},
+		{"canary channel", "canary", true},
 		{"semantic version", "1.0.0", true},
 		{"version with v prefix", "v1.0.0", true},
 		{"beta version", "1.0.0-beta", true},

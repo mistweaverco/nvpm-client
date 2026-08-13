@@ -349,6 +349,19 @@ func (p *GitLabProvider) Update(sourceID string) bool {
 		return false
 	}
 
+	registryItem := gitlabRegistryParser().GetBySourceId(sourceID)
+	if len(registryItem.Source.Asset) > 0 {
+		latestVersion, err := resolveReleaseUpdateVersion(sourceID, registryItem.Version, func() (string, error) {
+			return p.getLatestReleaseTag(repo)
+		})
+		if err != nil || strings.TrimSpace(latestVersion) == "" {
+			logAndSetError(fmt.Sprintf("GitLab Update: Could not determine latest release for %s: %v", repo, err))
+			return false
+		}
+		Logger.Info(fmt.Sprintf("GitLab Update: Updating %s to release %s", repo, latestVersion))
+		return p.Install(sourceID, latestVersion)
+	}
+
 	repoPath := p.getRepoPath(sourceID, repo)
 	if _, err := gitlabStat(repoPath); os.IsNotExist(err) {
 		logAndSetError(fmt.Sprintf("GitLab Update: Repository %s is not installed", repo))

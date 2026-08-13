@@ -88,11 +88,18 @@ func (p *NPMProvider) installedPackagePath(packageName string) string {
 	return filepath.Join(p.nodeModulesDir(packageName), packageName)
 }
 
-func (p *NPMProvider) writePackageJSON(dir, name, version string) bool {
+func (p *NPMProvider) writePackageJSON(dir, name, version string, extras *local_packages_parser.PackageExtras) bool {
+	deps := map[string]string{name: version}
+	for extraName, extraVer := range npmExtraPackageDependencies(p.PREFIX, extras) {
+		if extraName == name {
+			continue
+		}
+		deps[extraName] = extraVer
+	}
 	packageJSON := struct {
 		Dependencies map[string]string `json:"dependencies"`
 	}{
-		Dependencies: map[string]string{name: version},
+		Dependencies: deps,
 	}
 
 	filePath := filepath.Join(dir, "package.json")
@@ -116,6 +123,29 @@ func (p *NPMProvider) writePackageJSON(dir, name, version string) bool {
 	return true
 }
 
+func npmExtraPackageDependencies(prefix string, extras *local_packages_parser.PackageExtras) map[string]string {
+	if extras == nil {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, pin := range extras.ExtraPackages {
+		id := normalizePackageID(strings.TrimSpace(pin.ID))
+		if prefix != "" && !strings.HasPrefix(id, prefix) {
+			continue
+		}
+		extraName := strings.TrimPrefix(id, prefix)
+		if extraName == "" {
+			continue
+		}
+		ver := strings.TrimSpace(pin.Version)
+		if ver == "" {
+			ver = "*"
+		}
+		out[extraName] = ver
+	}
+	return out
+}
+
 func (p *NPMProvider) generatePackageJSON() bool {
 	found := false
 	localPackages := lppGetData(true).Packages
@@ -132,7 +162,7 @@ func (p *NPMProvider) generatePackageJSON() bool {
 			fmt.Println("error creating directory:", err)
 			return false
 		}
-		if !p.writePackageJSON(dir, name, pkg.Version) {
+		if !p.writePackageJSON(dir, name, pkg.Version, pkg.Extras) {
 			return false
 		}
 		found = true
@@ -257,7 +287,7 @@ func (p *NPMProvider) Sync() bool {
 			allOk = false
 			continue
 		}
-		if !p.writePackageJSON(dir, name, pkg.Version) {
+		if !p.writePackageJSON(dir, name, pkg.Version, pkg.Extras) {
 			allOk = false
 			continue
 		}

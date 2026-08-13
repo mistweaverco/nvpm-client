@@ -120,6 +120,7 @@ func TestIsGenericDefaultBranchAlias(t *testing.T) {
 	assert.True(t, IsGenericDefaultBranchAlias("main"))
 	assert.True(t, IsGenericDefaultBranchAlias("HEAD"))
 	assert.False(t, IsGenericDefaultBranchAlias("release"))
+	assert.False(t, IsGenericDefaultBranchAlias("nightly"), "nightly is a real GitHub release tag, not a branch alias")
 }
 
 func TestDiscoverGitRemoteLatestPrefersSemverTag(t *testing.T) {

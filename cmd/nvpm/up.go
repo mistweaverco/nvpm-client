@@ -348,6 +348,7 @@ Use nvpm add / nvpm set to install or switch to a specific version.`,
 
 			if success {
 				service.output.Printf("%s Successfully updated %s\n", IconCheck(), displayID)
+				service.printExtraPackagesInstalled(internalID)
 				successCount++
 				persistUpdateResolutionAfterInstall(internalID)
 				persistAlwaysTrustAfterInstall(internalID)
@@ -505,6 +506,7 @@ func (us *UpdateService) UpdateAllPackages(showFilters ...[]string) bool {
 		if success {
 			successCount++
 			us.output.Printf("%s Successfully updated %s\n", IconCheck(), pkg.SourceID)
+			us.printExtraPackagesInstalled(pkg.SourceID)
 			persistUpdateResolutionAfterInstall(pkg.SourceID)
 			persistAlwaysTrustAfterInstall(pkg.SourceID)
 			continue
@@ -538,6 +540,12 @@ func (us *UpdateService) UpdateAllPackages(showFilters ...[]string) bool {
 	us.output.Printf("  Skipped (up to date): %d\n", skippedCount)
 
 	return allSuccess
+}
+
+func (us *UpdateService) printExtraPackagesInstalled(sourceID string) {
+	if providers.ConsumeExtraPackagesInstalledLastOp() {
+		us.output.Printf("%s Extra packages installed for %s\n", IconCheck(), sourceID)
+	}
 }
 
 // checkUpdateAvailability checks if an update is available for a package

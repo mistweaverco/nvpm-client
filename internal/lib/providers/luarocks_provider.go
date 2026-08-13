@@ -30,6 +30,7 @@ var luarocksRemove = os.Remove
 var luarocksChmod = os.Chmod
 var luarocksStat = os.Stat
 var luarocksMkdirAll = os.MkdirAll
+var luarocksRemoveAll = os.RemoveAll
 var luarocksWriteFile = os.WriteFile
 
 // Injectable local packages helpers for tests
@@ -60,6 +61,10 @@ func (p *LuaRocksProvider) getRepo(sourceID string) string {
 	return ""
 }
 
+func (p *LuaRocksProvider) packageDir(packageName string) string {
+	return filepath.Join(p.APP_PACKAGES_DIR, packageName)
+}
+
 func (p *LuaRocksProvider) Install(sourceID, version string) bool {
 	packageName := p.getRepo(sourceID)
 	if packageName == "" {
@@ -72,8 +77,8 @@ func (p *LuaRocksProvider) Install(sourceID, version string) bool {
 		return false
 	}
 
-	// Ensure packages directory exists
-	if err := luarocksMkdirAll(p.APP_PACKAGES_DIR, 0755); err != nil {
+	dir := p.packageDir(packageName)
+	if err := luarocksMkdirAll(dir, 0755); err != nil {
 		Logger.Error(fmt.Sprintf("LuaRocks Install: Error creating packages directory: %v", err))
 		return false
 	}
@@ -83,7 +88,7 @@ func (p *LuaRocksProvider) Install(sourceID, version string) bool {
 	if version != "" && version != "latest" {
 		packageSpec = fmt.Sprintf("%s %s", packageName, version)
 	}
-	args := []string{"install", packageSpec, "--tree", p.APP_PACKAGES_DIR}
+	args := []string{"install", packageSpec, "--tree", dir}
 
 	Logger.Info(fmt.Sprintf("LuaRocks Install: Installing %s@%s", packageName, version))
 	code, err := luarocksShellOut(luarocksCmd, args, "", nil)
@@ -96,7 +101,7 @@ func (p *LuaRocksProvider) Install(sourceID, version string) bool {
 	installedVersion := version
 	if installedVersion == "" || installedVersion == "latest" {
 		// Try to get the installed version
-		code, output, err := luarocksShellOutCapture(luarocksCmd, []string{"list", "--tree", p.APP_PACKAGES_DIR}, "", nil)
+		code, output, err := luarocksShellOutCapture(luarocksCmd, []string{"list", "--tree", dir}, "", nil)
 		if err == nil && code == 0 {
 			lines := strings.Split(output, "\n")
 			for _, line := range lines {
@@ -125,6 +130,7 @@ func (p *LuaRocksProvider) Install(sourceID, version string) bool {
 	if err := p.createWrappers(); err != nil {
 		Logger.Info(fmt.Sprintf("LuaRocks Install: Warning creating wrappers: %v", err))
 	}
+	p.cleanupLegacyLuaRocksRoot()
 
 	Logger.Info(fmt.Sprintf("LuaRocks Install: Successfully installed %s@%s", packageName, installedVersion))
 	return true
@@ -149,8 +155,8 @@ func (p *LuaRocksProvider) Remove(sourceID string) bool {
 		Logger.Info(fmt.Sprintf("LuaRocks Remove: Warning removing wrappers: %v", err))
 	}
 
-	// Uninstall rock
-	code, err := luarocksShellOut(luarocksCmd, []string{"remove", packageName, "--tree", p.APP_PACKAGES_DIR}, "", nil)
+	dir := p.packageDir(packageName)
+	code, err := luarocksShellOut(luarocksCmd, []string{"remove", packageName, "--tree", dir}, "", nil)
 	if err != nil || code != 0 {
 		Logger.Info(fmt.Sprintf("LuaRocks Remove: Warning uninstalling rock (may not be installed): %v", err))
 	}
@@ -159,6 +165,9 @@ func (p *LuaRocksProvider) Remove(sourceID string) bool {
 	if err := lppLuarocksRemove(sourceID); err != nil {
 		Logger.Error(fmt.Sprintf("LuaRocks Remove: Error removing package from local packages: %v", err))
 		return false
+	}
+	if err := luarocksRemoveAll(dir); err != nil {
+		Logger.Info(fmt.Sprintf("LuaRocks Remove: Warning removing package directory: %v", err))
 	}
 
 	Logger.Info(fmt.Sprintf("LuaRocks Remove: Successfully removed %s", packageName))
@@ -179,8 +188,8 @@ func (p *LuaRocksProvider) Update(sourceID string) bool {
 
 	Logger.Info(fmt.Sprintf("LuaRocks Update: Updating %s", packageName))
 
-	// Update rock
-	code, err := luarocksShellOut(luarocksCmd, []string{"install", packageName, "--tree", p.APP_PACKAGES_DIR, "--force"}, "", nil)
+	dir := p.packageDir(packageName)
+	code, err := luarocksShellOut(luarocksCmd, []string{"install", packageName, "--tree", dir, "--force"}, "", nil)
 	if err != nil || code != 0 {
 		Logger.Error(fmt.Sprintf("LuaRocks Update: Error updating rock: %v", err))
 		return false
@@ -188,7 +197,7 @@ func (p *LuaRocksProvider) Update(sourceID string) bool {
 
 	// Get updated version
 	var updatedVersion string
-	code, output, err := luarocksShellOutCapture(luarocksCmd, []string{"list", "--tree", p.APP_PACKAGES_DIR}, "", nil)
+	code, output, err := luarocksShellOutCapture(luarocksCmd, []string{"list", "--tree", dir}, "", nil)
 	if err == nil && code == 0 {
 		lines := strings.Split(output, "\n")
 		for _, line := range lines {
@@ -247,14 +256,29 @@ func (p *LuaRocksProvider) getLatestVersion(packageName string) (string, error) 
 	return "", fmt.Errorf("version not found")
 }
 
-// findLuaRocksBinDir finds the LuaRocks bin directory
 func (p *LuaRocksProvider) findLuaRocksBinDir() string {
-	// LuaRocks installs binaries to: APP_PACKAGES_DIR/bin
-	binDir := filepath.Join(p.APP_PACKAGES_DIR, "bin")
+	return p.findLuaRocksBinDirIn(p.APP_PACKAGES_DIR)
+}
+
+func (p *LuaRocksProvider) findLuaRocksBinDirIn(prefixDir string) string {
+	return filepath.Join(prefixDir, "bin")
+}
+
+func (p *LuaRocksProvider) isLuaRockInstalled(packageName string) bool {
+	binDir := p.findLuaRocksBinDirIn(p.packageDir(packageName))
 	if _, err := luarocksStat(binDir); err == nil {
-		return binDir
+		return true
 	}
-	return binDir
+	for _, rocks := range []string{
+		filepath.Join(p.packageDir(packageName), "lib", "luarocks", "rocks", packageName),
+		filepath.Join(p.packageDir(packageName), "lib", "luarocks", "rocks-5.1", packageName),
+		filepath.Join(p.packageDir(packageName), "lib", "luarocks", "rocks-5.4", packageName),
+	} {
+		if _, err := luarocksStat(rocks); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // createWrappers creates wrapper scripts for LuaRocks executables
@@ -270,12 +294,13 @@ func (p *LuaRocksProvider) createWrappers() error {
 		if len(registryItem.Bin) == 0 {
 			continue
 		}
+		prefixDir := p.packageDir(p.getRepo(pkg.SourceID))
 		for binName, binCmd := range registryItem.Bin {
 			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := luarocksLstat(wrapperPath); err == nil {
 				_ = luarocksRemove(wrapperPath)
 			}
-			if err := p.createLuaRocksWrapperForCommand(binCmd, wrapperPath); err != nil {
+			if err := p.createLuaRocksWrapperForPrefix(binCmd, wrapperPath, prefixDir); err != nil {
 				Logger.Error(fmt.Sprintf("Error creating wrapper for %s: %v", binName, err))
 				continue
 			}
@@ -289,8 +314,15 @@ func (p *LuaRocksProvider) createWrappers() error {
 
 // createLuaRocksWrapperForCommand creates a wrapper that prepares the environment and executes the given command
 func (p *LuaRocksProvider) createLuaRocksWrapperForCommand(commandToExec string, wrapperPath string) error {
-	luarocksBinDir := p.findLuaRocksBinDir()
-	luarocksLibDir := filepath.Join(p.APP_PACKAGES_DIR, "lib", "luarocks", "rocks")
+	return p.createLuaRocksWrapperForPrefix(commandToExec, wrapperPath, p.APP_PACKAGES_DIR)
+}
+
+func (p *LuaRocksProvider) createLuaRocksWrapperForPrefix(commandToExec string, wrapperPath string, prefixDir string) error {
+	if prefixDir == "" {
+		prefixDir = p.APP_PACKAGES_DIR
+	}
+	luarocksBinDir := p.findLuaRocksBinDirIn(prefixDir)
+	luarocksLibDir := filepath.Join(prefixDir, "lib", "luarocks", "rocks")
 	if commandToExec == "" {
 		return fmt.Errorf("empty command for wrapper %s", wrapperPath)
 	}
@@ -346,15 +378,24 @@ func (p *LuaRocksProvider) removeWrappersForPackage(packageName string) error {
 	return nil
 }
 
+func (p *LuaRocksProvider) cleanupLegacyLuaRocksRoot() {
+	for _, name := range []string{"bin", "lib", "share"} {
+		path := filepath.Join(p.APP_PACKAGES_DIR, name)
+		if _, err := luarocksStat(path); err == nil {
+			_ = luarocksRemoveAll(path)
+		}
+	}
+}
+
 func (p *LuaRocksProvider) Sync() bool {
 	Logger.Info("LuaRocks Sync: Syncing LuaRocks packages")
 	localPackages := lppLuarocksGetDataForProvider(p.PROVIDER_NAME).Packages
 
 	if len(localPackages) == 0 {
+		p.cleanupLegacyLuaRocksRoot()
 		return true
 	}
 
-	// Check for luarocks command before proceeding
 	if !luarocksHasCommand("luarocks", []string{"--version"}, nil) {
 		Logger.Error("LuaRocks Sync: luarocks command not found. Please install LuaRocks.")
 		return false
@@ -366,11 +407,20 @@ func (p *LuaRocksProvider) Sync() bool {
 		if packageName == "" {
 			continue
 		}
+		dir := p.packageDir(packageName)
+		if err := luarocksMkdirAll(dir, 0755); err != nil {
+			Logger.Error(fmt.Sprintf("LuaRocks Sync: Error creating directory %s: %v", dir, err))
+			allOk = false
+			continue
+		}
+		if p.isLuaRockInstalled(packageName) {
+			continue
+		}
 		packageSpec := packageName
 		if pkg.Version != "" && pkg.Version != "latest" {
 			packageSpec = fmt.Sprintf("%s %s", packageName, pkg.Version)
 		}
-		args := []string{"install", packageSpec, "--tree", p.APP_PACKAGES_DIR}
+		args := []string{"install", packageSpec, "--tree", dir}
 		code, err := luarocksShellOut(luarocksCmd, args, "", nil)
 		if err != nil || code != 0 {
 			Logger.Error(fmt.Sprintf("LuaRocks Sync: Error installing %s: %v", packageName, err))
@@ -378,10 +428,9 @@ func (p *LuaRocksProvider) Sync() bool {
 		}
 	}
 
-	// Recreate wrappers
 	if err := p.createWrappers(); err != nil {
 		Logger.Info(fmt.Sprintf("LuaRocks Sync: Warning creating wrappers: %v", err))
 	}
-
+	p.cleanupLegacyLuaRocksRoot()
 	return allOk
 }

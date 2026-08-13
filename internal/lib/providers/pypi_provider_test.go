@@ -15,6 +15,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func pypiSitePackages(p *PyPiProvider, packageName, pythonVersion string) string {
+	return filepath.Join(p.packageDir(packageName), "lib", "python"+pythonVersion, "site-packages")
+}
+
+func pypiPrefixBin(p *PyPiProvider, packageName string) string {
+	return filepath.Join(p.packageDir(packageName), "bin")
+}
+
 // helper to set NVPM_HOME to a temp dir
 func withTempNvpmHome(t *testing.T) string {
 	t.Helper()
@@ -100,18 +108,16 @@ func TestPyPiProviderBasicFlows(t *testing.T) {
 	if v, err := p.getPythonVersion(); err == nil {
 		pythonVersion = v
 	}
-	site := filepath.Join(p.APP_PACKAGES_DIR, "lib", "python"+pythonVersion, "site-packages", "black-1.0.0.dist-info")
+	site := filepath.Join(pypiSitePackages(p, "black", pythonVersion), "black-1.0.0.dist-info")
 	_ = os.MkdirAll(site, 0755)
 	ep := "[console_scripts]\nblack=black:main\n"
 	assert.NoError(t, os.WriteFile(filepath.Join(site, "entry_points.txt"), []byte(ep), 0644))
-	// create a bin file to remove
-	binFile := filepath.Join(p.APP_PACKAGES_DIR, "bin", "black")
+	binFile := filepath.Join(pypiPrefixBin(p, "black"), "black")
 	_ = os.MkdirAll(filepath.Dir(binFile), 0755)
 	assert.NoError(t, os.WriteFile(binFile, []byte("#!/bin/sh\n"), 0755))
 	assert.NoError(t, p.removeBin("pkg:pypi/black"))
 
-	// Also create the directory structure for later Remove call
-	site2 := filepath.Join(p.APP_PACKAGES_DIR, "lib", "python"+pythonVersion, "site-packages", "black-2.0.0.dist-info")
+	site2 := filepath.Join(pypiSitePackages(p, "black", pythonVersion), "black-2.0.0.dist-info")
 	_ = os.MkdirAll(site2, 0755)
 	assert.NoError(t, os.WriteFile(filepath.Join(site2, "entry_points.txt"), []byte(ep), 0644))
 
@@ -467,10 +473,12 @@ func TestPyPiInstall_RollsBackLockWhenPackageFails(t *testing.T) {
 func TestPyPiFindPackageInfoDir_ErrorAndContinues(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderPyPi()
-	// create lib/pythonX/site-packages
-	lib := filepath.Join(p.APP_PACKAGES_DIR, "lib", "python3.11", "site-packages")
+	pythonVersion := "3.11"
+	if v, err := p.getPythonVersion(); err == nil {
+		pythonVersion = v
+	}
+	lib := pypiSitePackages(p, "pkg", pythonVersion)
 	_ = os.MkdirAll(lib, 0755)
-	// Cause ReadDir on site-packages to error -> return ""
 	oldRD := pipReadDir
 	pipReadDir = func(path string) ([]os.DirEntry, error) {
 		if path == lib {
@@ -479,13 +487,9 @@ func TestPyPiFindPackageInfoDir_ErrorAndContinues(t *testing.T) {
 		return oldRD(path)
 	}
 	assert.Equal(t, "", p.findPackageInfoDir("pkg"))
-	// Restore
 	pipReadDir = oldRD
 
-	// Now create entries that trigger both continue branches and still return ""
-	// 1) A non-directory file
 	_ = os.WriteFile(filepath.Join(lib, "file.txt"), []byte(""), 0644)
-	// 2) A directory that is not *.dist-info or *.egg-info
 	_ = os.MkdirAll(filepath.Join(lib, "notinfo"), 0755)
 	assert.Equal(t, "", p.findPackageInfoDir("pkg"))
 }
@@ -505,13 +509,12 @@ func TestPyPiSync_CreateDirErrorAndSkipInstalledInLoopAndFreezeError(t *testing.
 	p := NewProviderPyPi()
 	// 1) mkdir error
 	oldStat := pipStat
-	oldMkdir := pipMkdir
+	oldMkdirAll := pipMkdirAll
 	pipStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
-	pipMkdir = func(string, os.FileMode) error { return errors.New("mkdir") }
+	pipMkdirAll = func(string, os.FileMode) error { return errors.New("mkdir") }
 	assert.False(t, p.Sync())
-	// restore
 	pipStat = oldStat
-	pipMkdir = oldMkdir
+	pipMkdirAll = oldMkdirAll
 
 	// 2) skip in-loop for installed + increment skippedCount + freeze error log + install failure allOk=false
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
@@ -619,14 +622,17 @@ func TestPyPiRemove_WrapperRemovalErrorAndLocalRemoveError(t *testing.T) {
 	}})
 	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
 	// Ensure bin removal succeeds so we reach wrappers and local remove branches
-	lib := filepath.Join(p.APP_PACKAGES_DIR, "lib", "python3.11", "site-packages")
+	pythonVersion := "3.14"
+	if v, err := p.getPythonVersion(); err == nil {
+		pythonVersion = v
+	}
+	lib := pypiSitePackages(p, "tool", pythonVersion)
 	_ = os.MkdirAll(lib, 0755)
 	info := filepath.Join(lib, "tool-1.0.0.dist-info")
 	_ = os.MkdirAll(info, 0755)
 	_ = os.WriteFile(filepath.Join(info, "entry_points.txt"), []byte("[console_scripts]\ntool=t:m\n"), 0644)
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "bin"), 0755)
-	_ = os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "bin", "tool"), []byte(""), 0755)
-	// Cause wrapper removal to try and warn by making file exist then removal fail
+	_ = os.MkdirAll(pypiPrefixBin(p, "tool"), 0755)
+	_ = os.WriteFile(filepath.Join(pypiPrefixBin(p, "tool"), "tool"), []byte(""), 0755)
 	_ = os.WriteFile(filepath.Join(files.GetAppBinPath(), "tool"), []byte(""), 0755)
 	oldLs := pipLstat
 	oldRm := pipRemove
@@ -651,14 +657,17 @@ func TestPyPiRemove_LocalRemoveErrorReturnsFalse(t *testing.T) {
 		Bin: map[string]string{"tool": "tool"},
 	}})
 	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
-	lib := filepath.Join(p.APP_PACKAGES_DIR, "lib", "python3.11", "site-packages")
+	pythonVersion := "3.14"
+	if v, err := p.getPythonVersion(); err == nil {
+		pythonVersion = v
+	}
+	lib := pypiSitePackages(p, "tool", pythonVersion)
 	_ = os.MkdirAll(lib, 0755)
 	info := filepath.Join(lib, "tool-1.0.0.dist-info")
 	_ = os.MkdirAll(info, 0755)
 	_ = os.WriteFile(filepath.Join(info, "entry_points.txt"), []byte("[console_scripts]\ntool=t:m\n"), 0644)
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "bin"), 0755)
-	_ = os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "bin", "tool"), []byte(""), 0755)
-	// Make local remove fail so Remove returns false at the targeted line
+	_ = os.MkdirAll(pypiPrefixBin(p, "tool"), 0755)
+	_ = os.WriteFile(filepath.Join(pypiPrefixBin(p, "tool"), "tool"), []byte(""), 0755)
 	oldLocalRemove := lppPyRemove
 	lppPyRemove = func(string) error { return errors.New("local-remove") }
 	assert.False(t, p.Remove("pkg:pypi/tool"))
@@ -672,13 +681,17 @@ func TestPyPiRemove_InvalidSourceAndRemoveBinFailure(t *testing.T) {
 	// invalid source id for removeBin
 	assert.Error(t, p.removeBin("pkg:pypi/"))
 	// setup info dir and bin then make removal fail
-	lib := filepath.Join(p.APP_PACKAGES_DIR, "lib", "python3.11", "site-packages")
+	pythonVersion := "3.14"
+	if v, err := p.getPythonVersion(); err == nil {
+		pythonVersion = v
+	}
+	lib := pypiSitePackages(p, "tool", pythonVersion)
 	_ = os.MkdirAll(lib, 0755)
 	info := filepath.Join(lib, "tool-1.0.0.dist-info")
 	_ = os.MkdirAll(info, 0755)
 	_ = os.WriteFile(filepath.Join(info, "entry_points.txt"), []byte("[console_scripts]\ntool=t:m\n"), 0644)
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "bin"), 0755)
-	_ = os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "bin", "tool"), []byte(""), 0755)
+	_ = os.MkdirAll(pypiPrefixBin(p, "tool"), 0755)
+	_ = os.WriteFile(filepath.Join(pypiPrefixBin(p, "tool"), "tool"), []byte(""), 0755)
 	oldLs := pipLstat
 	oldRm := pipRemove
 	pipLstat = func(string) (os.FileInfo, error) { return fileInfoNow(t), nil }
@@ -706,6 +719,7 @@ func TestPyPiAreAllInstalledTrueTriggersWrappers(t *testing.T) {
 	oldCh := pipChmod
 	pipChmod = func(string, os.FileMode) error { return nil }
 	assert.True(t, p.Sync())
+	assert.True(t, p.areAllPackagesInstalled(lppPyGetDataForProvider("pypi").Packages))
 	pipChmod = oldCh
 	pipShellOutCapture = oldCap
 }
@@ -752,18 +766,18 @@ func TestPyPiMorePermutations(t *testing.T) {
 	assert.Equal(t, lib, detectedLib)
 
 	// findPackageInfoDir with dist-info and egg-info
-	infoDist := filepath.Join(detectedLib, "pkg-1.0.0.dist-info")
+	pkgLib := pypiSitePackages(p, "pkg", pythonVersion)
+	_ = os.MkdirAll(pkgLib, 0755)
+	infoDist := filepath.Join(pkgLib, "pkg-1.0.0.dist-info")
 	_ = os.MkdirAll(infoDist, 0755)
 	result := p.findPackageInfoDir("pkg")
-	if result != "" {
-		assert.Contains(t, result, "dist-info")
-	}
-	infoEgg := filepath.Join(detectedLib, "egg.egg-info")
+	assert.Contains(t, result, "dist-info")
+	eggLib := pypiSitePackages(p, "egg", pythonVersion)
+	_ = os.MkdirAll(eggLib, 0755)
+	infoEgg := filepath.Join(eggLib, "egg.egg-info")
 	_ = os.MkdirAll(infoEgg, 0755)
 	resultEgg := p.findPackageInfoDir("egg")
-	if resultEgg != "" {
-		assert.Contains(t, resultEgg, "egg-info")
-	}
+	assert.Contains(t, resultEgg, "egg-info")
 
 	// Remove: local remove fails -> false
 	oldRm := lppPyRemove
@@ -795,31 +809,22 @@ func TestPyPiGenerateRequirementsCreateErrorAndRemoveWrappersNoBinAndRemoveBinSu
 	assert.NoError(t, p.removePackageWrappers("nobin"))
 
 	// removeBin success: create info dir and bin file; ensure it deletes
-	binDir := filepath.Join(p.APP_PACKAGES_DIR, "bin")
-	_ = os.MkdirAll(binDir, 0755)
-	binFile := filepath.Join(binDir, "tool")
-	assert.NoError(t, os.WriteFile(binFile, []byte(""), 0755))
-	// Use the Python version that findSitePackagesDir will detect
-	pythonVersion := "3.14" // Default fallback
+	pythonVersion := "3.14"
 	if v, err := p.getPythonVersion(); err == nil {
 		pythonVersion = v
 	}
-	lib := filepath.Join(p.APP_PACKAGES_DIR, "lib", "python"+pythonVersion, "site-packages")
+	binDir := pypiPrefixBin(p, "tool")
+	_ = os.MkdirAll(binDir, 0755)
+	binFile := filepath.Join(binDir, "tool")
+	assert.NoError(t, os.WriteFile(binFile, []byte(""), 0755))
+	lib := pypiSitePackages(p, "tool", pythonVersion)
 	_ = os.MkdirAll(lib, 0755)
 	info := filepath.Join(lib, "tool-1.0.0.dist-info")
 	_ = os.MkdirAll(info, 0755)
-	// entry_points.txt with console_scripts
 	assert.NoError(t, os.WriteFile(filepath.Join(info, "entry_points.txt"), []byte("[console_scripts]\ntool = t:m\n"), 0644))
-	// removeBin should succeed when the package info directory exists
-	err := p.removeBin("pkg:pypi/tool")
-	if err != nil {
-		// If it fails, it's because the directory wasn't found - skip this assertion
-		t.Logf("removeBin returned error (expected if package info dir not found): %v", err)
-	} else {
-		// file should be gone
-		_, err := os.Lstat(binFile)
-		assert.Error(t, err)
-	}
+	assert.NoError(t, p.removeBin("pkg:pypi/tool"))
+	_, err := os.Lstat(binFile)
+	assert.Error(t, err)
 }
 
 func TestPyPiSyncMixedInstalledSkippedAndGuiScriptsAndRemoveHappy(t *testing.T) {
@@ -864,13 +869,18 @@ func TestPyPiSyncMixedInstalledSkippedAndGuiScriptsAndRemoveHappy(t *testing.T) 
 	}})
 	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
 	// create wrapper and bin to be removed
+	pythonVersion := "3.14"
+	if v, err := p.getPythonVersion(); err == nil {
+		pythonVersion = v
+	}
 	_ = os.WriteFile(filepath.Join(files.GetAppBinPath(), "tool"), []byte(""), 0755)
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "lib", "python3.11", "site-packages"), 0755)
-	pid := filepath.Join(p.APP_PACKAGES_DIR, "lib", "python3.11", "site-packages", "tool-1.0.0.dist-info")
+	lib := pypiSitePackages(p, "tool", pythonVersion)
+	_ = os.MkdirAll(lib, 0755)
+	pid := filepath.Join(lib, "tool-1.0.0.dist-info")
 	_ = os.MkdirAll(pid, 0755)
 	_ = os.WriteFile(filepath.Join(pid, "entry_points.txt"), []byte("[console_scripts]\ntool = t:m\n"), 0644)
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "bin"), 0755)
-	_ = os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "bin", "tool"), []byte(""), 0755)
+	_ = os.MkdirAll(pypiPrefixBin(p, "tool"), 0755)
+	_ = os.WriteFile(filepath.Join(pypiPrefixBin(p, "tool"), "tool"), []byte(""), 0755)
 	assert.True(t, p.Remove("pkg:pypi/tool"))
 	// restore after Remove's internal Sync completed
 	pipChmod = oldCh
@@ -883,4 +893,161 @@ func TestPyPiSyncReturnsEarlyWhenNoPackages(t *testing.T) {
 	p := NewProviderPyPi()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	assert.True(t, p.Sync())
+}
+
+func TestPyPiPerPackageWrapperPointsAtContainer(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderPyPi()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	_ = lppPyAdd("pypi:yamllint", "1.0.0")
+	_ = lppPyAdd("pypi:black", "2.0.0")
+	writeRegistry(t, []registry_parser.RegistryItem{
+		{Name: "yamllint", Version: "1.0.0", Source: registry_parser.RegistryItemSource{ID: "pypi:yamllint"}, Bin: map[string]string{"yamllint": "pypi:yamllint"}},
+		{Name: "black", Version: "2.0.0", Source: registry_parser.RegistryItemSource{ID: "pypi:black"}, Bin: map[string]string{"black": "pypi:black"}},
+	})
+	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
+	oldCap := pipShellOutCapture
+	oldOut := pipShellOut
+	pipShellOutCapture = func(cmd string, args []string, dir string, env []string) (int, string, error) {
+		if cmd == pipCmd && len(args) >= 1 && args[0] == "freeze" {
+			if strings.Contains(dir, "yamllint") {
+				return 0, "yamllint==1.0.0\n", nil
+			}
+			if strings.Contains(dir, "black") {
+				return 0, "black==2.0.0\n", nil
+			}
+			return 0, "", nil
+		}
+		return 0, "", nil
+	}
+	pipShellOut = func(string, []string, string, []string) (int, error) { return 0, nil }
+	assert.True(t, p.Sync())
+	pipShellOut = oldOut
+	pipShellOutCapture = oldCap
+
+	yamllint, err := os.ReadFile(filepath.Join(files.GetAppBinPath(), "yamllint"))
+	assert.NoError(t, err)
+	assert.Contains(t, string(yamllint), filepath.Join("packages", "pypi", "yamllint"))
+	assert.NotContains(t, string(yamllint), filepath.Join("packages", "pypi", "black"))
+	black, err := os.ReadFile(filepath.Join(files.GetAppBinPath(), "black"))
+	assert.NoError(t, err)
+	assert.Contains(t, string(black), filepath.Join("packages", "pypi", "black"))
+	assert.NotContains(t, string(black), filepath.Join("packages", "pypi", "yamllint"))
+}
+
+func TestPyPiSyncMigratesLegacySharedPrefix(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderPyPi()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	_ = lppPyAdd("pypi:yamllint", "1.35.0")
+	writeRegistry(t, []registry_parser.RegistryItem{{
+		Name: "yamllint", Version: "1.35.0", Source: registry_parser.RegistryItemSource{ID: "pypi:yamllint"},
+		Bin: map[string]string{"yamllint": "pypi:yamllint"},
+	}})
+	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
+
+	assert.NoError(t, os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "requirements.txt"), []byte("yamllint==1.35.0\n"), 0644))
+	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "lib", "python3.11", "site-packages"), 0755)
+	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "bin"), 0755)
+	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "include"), 0755)
+
+	installed := false
+	oldCap := pipShellOutCapture
+	oldOut := pipShellOut
+	pipShellOutCapture = func(cmd string, args []string, dir string, env []string) (int, string, error) {
+		if cmd == pipCmd && len(args) >= 1 && args[0] == "freeze" {
+			if installed && strings.Contains(dir, filepath.Join("pypi", "yamllint")) {
+				return 0, "yamllint==1.35.0\n", nil
+			}
+			return 0, "", nil
+		}
+		return 0, "", nil
+	}
+	pipShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
+		if len(args) >= 1 && args[0] == "install" {
+			assert.Equal(t, p.packageDir("yamllint"), args[len(args)-1])
+			installed = true
+		}
+		return 0, nil
+	}
+	assert.True(t, p.Sync())
+	pipShellOut = oldOut
+	pipShellOutCapture = oldCap
+
+	_, err := os.Stat(filepath.Join(p.APP_PACKAGES_DIR, "requirements.txt"))
+	assert.Error(t, err)
+	_, err = os.Stat(filepath.Join(p.APP_PACKAGES_DIR, "lib"))
+	assert.Error(t, err)
+	_, err = os.Stat(filepath.Join(p.APP_PACKAGES_DIR, "bin"))
+	assert.Error(t, err)
+	_, err = os.Stat(p.packageDir("yamllint"))
+	assert.NoError(t, err)
+
+	wrapper, err := os.ReadFile(filepath.Join(files.GetAppBinPath(), "yamllint"))
+	assert.NoError(t, err)
+	assert.Contains(t, string(wrapper), filepath.Join("packages", "pypi", "yamllint"))
+}
+
+func TestPyPiInstallMigratesPackageIntoContainer(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderPyPi()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	writeRegistry(t, []registry_parser.RegistryItem{{
+		Name: "black", Version: "24.0.0", Source: registry_parser.RegistryItemSource{ID: "pypi:black"},
+		Bin: map[string]string{"black": "pypi:black"},
+	}})
+	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
+	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "lib"), 0755)
+	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "bin"), 0755)
+
+	oldCap := pipShellOutCapture
+	oldOut := pipShellOut
+	pipShellOutCapture = func(cmd string, args []string, dir string, env []string) (int, string, error) {
+		if cmd == pipCmd && len(args) >= 1 && args[0] == "freeze" {
+			if strings.Contains(dir, filepath.Join("pypi", "black")) {
+				return 0, "black==24.0.0\n", nil
+			}
+			return 0, "", nil
+		}
+		return 0, "", nil
+	}
+	pipShellOut = func(string, []string, string, []string) (int, error) { return 0, nil }
+	assert.True(t, p.Install("pypi:black", "24.0.0"))
+	pipShellOut = oldOut
+	pipShellOutCapture = oldCap
+
+	_, err := os.Stat(filepath.Join(p.APP_PACKAGES_DIR, "lib"))
+	assert.Error(t, err)
+	_, err = os.Stat(p.packageDir("black"))
+	assert.NoError(t, err)
+	wrapper, err := os.ReadFile(filepath.Join(files.GetAppBinPath(), "black"))
+	assert.NoError(t, err)
+	assert.Contains(t, string(wrapper), filepath.Join("packages", "pypi", "black"))
+}
+
+func TestPyPiRemoveDeletesContainerAndWrapper(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderPyPi()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	_ = lppPyAdd("pypi:black", "1.0.0")
+	writeRegistry(t, []registry_parser.RegistryItem{{
+		Name: "black", Version: "1.0.0", Source: registry_parser.RegistryItemSource{ID: "pypi:black"},
+		Bin: map[string]string{"black": "black"},
+	}})
+	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
+	_ = os.MkdirAll(p.packageDir("black"), 0755)
+	assert.NoError(t, os.WriteFile(filepath.Join(files.GetAppBinPath(), "black"), []byte("wrapper"), 0755))
+
+	oldCap := pipShellOutCapture
+	oldOut := pipShellOut
+	pipShellOutCapture = func(string, []string, string, []string) (int, string, error) { return 0, "", nil }
+	pipShellOut = func(string, []string, string, []string) (int, error) { return 0, nil }
+	assert.True(t, p.Remove("pypi:black"))
+	pipShellOut = oldOut
+	pipShellOutCapture = oldCap
+
+	_, err := os.Stat(p.packageDir("black"))
+	assert.Error(t, err)
+	_, err = os.Lstat(filepath.Join(files.GetAppBinPath(), "black"))
+	assert.Error(t, err)
 }

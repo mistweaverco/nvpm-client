@@ -30,6 +30,7 @@ var opamRemove = os.Remove
 var opamChmod = os.Chmod
 var opamStat = os.Stat
 var opamMkdirAll = os.MkdirAll
+var opamRemoveAll = os.RemoveAll
 var opamWriteFile = os.WriteFile
 
 // Injectable local packages helpers for tests
@@ -60,6 +61,29 @@ func (p *OpamProvider) getRepo(sourceID string) string {
 	return ""
 }
 
+func (p *OpamProvider) packageDir(packageName string) string {
+	return filepath.Join(p.APP_PACKAGES_DIR, packageName)
+}
+
+func (p *OpamProvider) switchPath(packageName string) string {
+	return filepath.Join(p.packageDir(packageName), "switch")
+}
+
+func (p *OpamProvider) ensureSwitch(switchPath string) bool {
+	if _, err := opamStat(switchPath); err == nil {
+		return true
+	}
+	code, err := opamShellOut(opamCmd, []string{"switch", "create", switchPath, "ocaml-base-compiler.5.1.0", "--no-switch"}, "", nil)
+	if err != nil || code != 0 {
+		code, err = opamShellOut(opamCmd, []string{"switch", "create", switchPath, "--no-switch"}, "", nil)
+		if err != nil || code != 0 {
+			Logger.Error(fmt.Sprintf("OPAM: Error creating switch: %v", err))
+			return false
+		}
+	}
+	return true
+}
+
 func (p *OpamProvider) Install(sourceID, version string) bool {
 	packageName := p.getRepo(sourceID)
 	if packageName == "" {
@@ -72,25 +96,15 @@ func (p *OpamProvider) Install(sourceID, version string) bool {
 		return false
 	}
 
-	// Ensure packages directory exists
-	if err := opamMkdirAll(p.APP_PACKAGES_DIR, 0755); err != nil {
+	dir := p.packageDir(packageName)
+	if err := opamMkdirAll(dir, 0755); err != nil {
 		Logger.Error(fmt.Sprintf("OPAM Install: Error creating packages directory: %v", err))
 		return false
 	}
 
-	// Initialize OPAM switch if needed
-	switchPath := filepath.Join(p.APP_PACKAGES_DIR, "switch")
-	if _, err := opamStat(switchPath); os.IsNotExist(err) {
-		// Initialize OPAM switch
-		code, err := opamShellOut(opamCmd, []string{"switch", "create", switchPath, "ocaml-base-compiler.5.1.0", "--no-switch"}, "", nil)
-		if err != nil || code != 0 {
-			// Try with default compiler
-			code, err = opamShellOut(opamCmd, []string{"switch", "create", switchPath, "--no-switch"}, "", nil)
-			if err != nil || code != 0 {
-				Logger.Error(fmt.Sprintf("OPAM Install: Error creating switch: %v", err))
-				return false
-			}
-		}
+	switchPath := p.switchPath(packageName)
+	if !p.ensureSwitch(switchPath) {
+		return false
 	}
 
 	// Build opam install command
@@ -139,6 +153,7 @@ func (p *OpamProvider) Install(sourceID, version string) bool {
 	if err := p.createWrappers(); err != nil {
 		Logger.Info(fmt.Sprintf("OPAM Install: Warning creating wrappers: %v", err))
 	}
+	p.cleanupLegacyOpamRoot()
 
 	Logger.Info(fmt.Sprintf("OPAM Install: Successfully installed %s@%s", packageName, installedVersion))
 	return true
@@ -158,7 +173,7 @@ func (p *OpamProvider) Remove(sourceID string) bool {
 
 	Logger.Info(fmt.Sprintf("OPAM Remove: Removing %s", packageName))
 
-	switchPath := filepath.Join(p.APP_PACKAGES_DIR, "switch")
+	switchPath := p.switchPath(packageName)
 
 	// Remove wrappers
 	if err := p.removeWrappersForPackage(packageName); err != nil {
@@ -175,6 +190,9 @@ func (p *OpamProvider) Remove(sourceID string) bool {
 	if err := lppOpamRemove(sourceID); err != nil {
 		Logger.Error(fmt.Sprintf("OPAM Remove: Error removing package from local packages: %v", err))
 		return false
+	}
+	if err := opamRemoveAll(p.packageDir(packageName)); err != nil {
+		Logger.Info(fmt.Sprintf("OPAM Remove: Warning removing package directory: %v", err))
 	}
 
 	Logger.Info(fmt.Sprintf("OPAM Remove: Successfully removed %s", packageName))
@@ -195,7 +213,7 @@ func (p *OpamProvider) Update(sourceID string) bool {
 
 	Logger.Info(fmt.Sprintf("OPAM Update: Updating %s", packageName))
 
-	switchPath := filepath.Join(p.APP_PACKAGES_DIR, "switch")
+	switchPath := p.switchPath(packageName)
 
 	// Update package
 	code, err := opamShellOut(opamCmd, []string{"upgrade", packageName, "--switch", switchPath, "--yes", "--no-depexts"}, "", nil)
@@ -258,15 +276,18 @@ func (p *OpamProvider) getLatestVersion(packageName string) (string, error) {
 	return version, nil
 }
 
-// findOpamBinDir finds the OPAM bin directory
 func (p *OpamProvider) findOpamBinDir() string {
-	// OPAM installs binaries to: APP_PACKAGES_DIR/switch/bin
-	switchPath := filepath.Join(p.APP_PACKAGES_DIR, "switch")
-	binDir := filepath.Join(switchPath, "bin")
-	if _, err := opamStat(binDir); err == nil {
-		return binDir
-	}
-	return binDir
+	return p.findOpamBinDirIn(filepath.Join(p.APP_PACKAGES_DIR, "switch"))
+}
+
+func (p *OpamProvider) findOpamBinDirIn(switchPath string) string {
+	return filepath.Join(switchPath, "bin")
+}
+
+func (p *OpamProvider) isOpamPackageInstalled(packageName string) bool {
+	binDir := p.findOpamBinDirIn(p.switchPath(packageName))
+	_, err := opamStat(binDir)
+	return err == nil
 }
 
 // createWrappers creates wrapper scripts for OPAM executables
@@ -282,12 +303,13 @@ func (p *OpamProvider) createWrappers() error {
 		if len(registryItem.Bin) == 0 {
 			continue
 		}
+		switchPath := p.switchPath(p.getRepo(pkg.SourceID))
 		for binName, binCmd := range registryItem.Bin {
 			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := opamLstat(wrapperPath); err == nil {
 				_ = opamRemove(wrapperPath)
 			}
-			if err := p.createOpamWrapperForCommand(binCmd, wrapperPath); err != nil {
+			if err := p.createOpamWrapperForPrefix(binCmd, wrapperPath, switchPath); err != nil {
 				Logger.Error(fmt.Sprintf("Error creating wrapper for %s: %v", binName, err))
 				continue
 			}
@@ -301,8 +323,14 @@ func (p *OpamProvider) createWrappers() error {
 
 // createOpamWrapperForCommand creates a wrapper that prepares the environment and executes the given command
 func (p *OpamProvider) createOpamWrapperForCommand(commandToExec string, wrapperPath string) error {
-	opamBinDir := p.findOpamBinDir()
-	switchPath := filepath.Join(p.APP_PACKAGES_DIR, "switch")
+	return p.createOpamWrapperForPrefix(commandToExec, wrapperPath, filepath.Join(p.APP_PACKAGES_DIR, "switch"))
+}
+
+func (p *OpamProvider) createOpamWrapperForPrefix(commandToExec string, wrapperPath string, switchPath string) error {
+	if switchPath == "" {
+		switchPath = filepath.Join(p.APP_PACKAGES_DIR, "switch")
+	}
+	opamBinDir := p.findOpamBinDirIn(switchPath)
 	if commandToExec == "" {
 		return fmt.Errorf("empty command for wrapper %s", wrapperPath)
 	}
@@ -358,26 +386,51 @@ func (p *OpamProvider) removeWrappersForPackage(packageName string) error {
 	return nil
 }
 
+func (p *OpamProvider) cleanupLegacyOpamRoot() {
+	legacySwitch := filepath.Join(p.APP_PACKAGES_DIR, "switch")
+	legacyBin := filepath.Join(legacySwitch, "bin")
+	nestedSwitch := filepath.Join(legacySwitch, "switch")
+	if _, err := opamStat(legacyBin); err != nil {
+		return
+	}
+	if _, err := opamStat(nestedSwitch); err == nil {
+		return
+	}
+	_ = opamRemoveAll(legacySwitch)
+}
+
 func (p *OpamProvider) Sync() bool {
 	Logger.Info("OPAM Sync: Syncing OPAM packages")
 	localPackages := lppOpamGetDataForProvider(p.PROVIDER_NAME).Packages
 
 	if len(localPackages) == 0 {
+		p.cleanupLegacyOpamRoot()
 		return true
 	}
 
-	// Check for opam command before proceeding
 	if !opamHasCommand("opam", []string{"--version"}, nil) {
 		Logger.Error("OPAM Sync: opam command not found. Please install OPAM.")
 		return false
 	}
 
-	switchPath := filepath.Join(p.APP_PACKAGES_DIR, "switch")
-
 	allOk := true
 	for _, pkg := range localPackages {
 		packageName := p.getRepo(pkg.SourceID)
 		if packageName == "" {
+			continue
+		}
+		dir := p.packageDir(packageName)
+		if err := opamMkdirAll(dir, 0755); err != nil {
+			Logger.Error(fmt.Sprintf("OPAM Sync: Error creating directory %s: %v", dir, err))
+			allOk = false
+			continue
+		}
+		if p.isOpamPackageInstalled(packageName) {
+			continue
+		}
+		switchPath := p.switchPath(packageName)
+		if !p.ensureSwitch(switchPath) {
+			allOk = false
 			continue
 		}
 		packageSpec := packageName
@@ -391,10 +444,9 @@ func (p *OpamProvider) Sync() bool {
 		}
 	}
 
-	// Recreate wrappers
 	if err := p.createWrappers(); err != nil {
 		Logger.Info(fmt.Sprintf("OPAM Sync: Warning creating wrappers: %v", err))
 	}
-
+	p.cleanupLegacyOpamRoot()
 	return allOk
 }

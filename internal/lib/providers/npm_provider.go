@@ -10,6 +10,7 @@ import (
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 )
 
@@ -20,12 +21,13 @@ var npmCreate = os.Create
 var npmReadFile = os.ReadFile
 var npmReadDir = os.ReadDir
 var npmLstat = os.Lstat
+var npmReadlink = os.Readlink
 var npmRemove = os.Remove
 var npmRemoveAll = os.RemoveAll
 var npmSymlink = os.Symlink
 var npmChmod = os.Chmod
 var npmStat = os.Stat
-var npmMkdir = os.Mkdir
+var npmMkdirAll = os.MkdirAll
 var npmClose = func(f *os.File) error { return f.Close() }
 
 // npmQuietEnv suppresses npm's update notifier so its notices cannot pollute
@@ -72,24 +74,28 @@ func (p *NPMProvider) getRepo(sourceID string) string {
 	return ""
 }
 
-func (p *NPMProvider) generatePackageJSON() bool {
-	found := false
+// packageDir is the per-package container under packages/npm/<name>.
+// Scoped names like @vue/language-server become packages/npm/@vue/language-server.
+func (p *NPMProvider) packageDir(packageName string) string {
+	return filepath.Join(p.APP_PACKAGES_DIR, packageName)
+}
+
+func (p *NPMProvider) nodeModulesDir(packageName string) string {
+	return filepath.Join(p.packageDir(packageName), "node_modules")
+}
+
+func (p *NPMProvider) installedPackagePath(packageName string) string {
+	return filepath.Join(p.nodeModulesDir(packageName), packageName)
+}
+
+func (p *NPMProvider) writePackageJSON(dir, name, version string) bool {
 	packageJSON := struct {
 		Dependencies map[string]string `json:"dependencies"`
 	}{
-		Dependencies: make(map[string]string),
+		Dependencies: map[string]string{name: version},
 	}
 
-	localPackages := lppGetData(true).Packages
-	for _, pkg := range localPackages {
-		if detectProvider(pkg.SourceID) != ProviderNPM {
-			continue
-		}
-		packageJSON.Dependencies[p.getRepo(pkg.SourceID)] = pkg.Version
-		found = true
-	}
-
-	filePath := filepath.Join(p.APP_PACKAGES_DIR, "package.json")
+	filePath := filepath.Join(dir, "package.json")
 	file, err := npmCreate(filePath)
 	if err != nil {
 		fmt.Println("error creating package.json:", err)
@@ -103,12 +109,34 @@ func (p *NPMProvider) generatePackageJSON() bool {
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	err = encoder.Encode(packageJSON)
-	if err != nil {
+	if err := encoder.Encode(packageJSON); err != nil {
 		fmt.Println("Error encoding package.json:", err)
 		return false
 	}
+	return true
+}
 
+func (p *NPMProvider) generatePackageJSON() bool {
+	found := false
+	localPackages := lppGetData(true).Packages
+	for _, pkg := range localPackages {
+		if detectProvider(pkg.SourceID) != ProviderNPM {
+			continue
+		}
+		name := p.getRepo(pkg.SourceID)
+		if name == "" {
+			continue
+		}
+		dir := p.packageDir(name)
+		if err := npmMkdirAll(dir, 0755); err != nil {
+			fmt.Println("error creating directory:", err)
+			return false
+		}
+		if !p.writePackageJSON(dir, name, pkg.Version) {
+			return false
+		}
+		found = true
+	}
 	return found
 }
 
@@ -155,17 +183,38 @@ func (p *NPMProvider) readPackageJSON(packagePath string) (*PackageJSON, error) 
 }
 
 func (p *NPMProvider) removeAllSymlinks() error {
+	desired := lppGetDataForProvider("npm").Packages
+	for _, pkg := range desired {
+		name := p.getRepo(pkg.SourceID)
+		if name == "" {
+			continue
+		}
+		_ = p.removePackageSymlinks(name)
+	}
+	return p.removeDanglingLegacyNpmSymlinks()
+}
+
+func (p *NPMProvider) removeDanglingLegacyNpmSymlinks() error {
 	binDir := files.GetAppBinPath()
 	entries, err := npmReadDir(binDir)
 	if err != nil {
 		return err
 	}
+	legacyPrefix := filepath.Join(p.APP_PACKAGES_DIR, "node_modules")
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		symlinkPath := filepath.Join(binDir, entry.Name())
-		if _, err := npmLstat(symlinkPath); err == nil {
+		target, err := npmReadlink(symlinkPath)
+		if err != nil {
+			continue
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(binDir, target)
+		}
+		target = filepath.Clean(target)
+		if target == legacyPrefix || strings.HasPrefix(target, legacyPrefix+string(os.PathSeparator)) {
 			if err := npmRemove(symlinkPath); err != nil {
 				Logger.Info(fmt.Sprintf("warning: failed to remove symlink %s: %v", symlinkPath, err))
 			}
@@ -187,70 +236,31 @@ func (p *NPMProvider) Clean() bool {
 
 func (p *NPMProvider) Sync() bool {
 	if _, err := npmStat(p.APP_PACKAGES_DIR); os.IsNotExist(err) {
-		if err := npmMkdir(p.APP_PACKAGES_DIR, 0755); err != nil {
+		if err := npmMkdirAll(p.APP_PACKAGES_DIR, 0755); err != nil {
 			fmt.Println("error creating directory:", err)
 			return false
 		}
 	}
 	Logger.Info("npm sync: Starting sync process")
-	packagesFound := p.generatePackageJSON()
-	if !packagesFound {
-		return true
-	}
 	desired := lppGetDataForProvider("npm").Packages
-	lockFile := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
-	packageJSONFile := filepath.Join(p.APP_PACKAGES_DIR, "package.json")
-	lockExists := false
-	lockNewer := false
-	if lockStat, err := npmStat(lockFile); err == nil {
-		lockExists = true
-		if pkgStat, err := npmStat(packageJSONFile); err == nil {
-			lockNewer = lockStat.ModTime().After(pkgStat.ModTime())
-		}
-	}
-	// Note: We intentionally unify handling of the fast-path here to avoid
-	// duplicated branches that were hard to exercise in tests. The behavior
-	// remains the same: when all desired match the lockfile, create symlinks
-	// and return true.
-	if lockExists && lockNewer {
-		installed := p.getInstalledPackagesFromLock(lockFile)
-		allInstalled := true
-		needsUpdate := false
-		for _, pkg := range desired {
-			name := p.getRepo(pkg.SourceID)
-			if v, ok := installed[name]; !ok || v != pkg.Version {
-				allInstalled = false
-				needsUpdate = true
-				break
-			}
-		}
-		if allInstalled {
-			for _, pkg := range desired {
-				name := p.getRepo(pkg.SourceID)
-				if err := p.createPackageSymlinks(name); err != nil {
-					Logger.Info(fmt.Sprintf("error creating symlinks for %s: %v", name, err))
-				}
-			}
-			return true
-		}
-		if needsUpdate {
-			Logger.Info("npm sync: Attempting npm ci for faster bulk installation")
-			if p.tryNpmCi() {
-				Logger.Info("npm sync: npm ci completed successfully")
-				return true
-			}
-			Logger.Info("npm sync: npm ci failed, falling back to individual package installation")
-			if err := npmRemove(lockFile); err != nil {
-				Logger.Info(fmt.Sprintf("warning: failed to remove lock file: %v", err))
-			}
-		}
-	}
-	Logger.Info("npm sync: Installing packages individually")
 	allOk := true
 	installedCount := 0
 	skippedCount := 0
 	for _, pkg := range desired {
 		name := p.getRepo(pkg.SourceID)
+		if name == "" {
+			continue
+		}
+		dir := p.packageDir(name)
+		if err := npmMkdirAll(dir, 0755); err != nil {
+			Logger.Info(fmt.Sprintf("error creating directory %s: %v", dir, err))
+			allOk = false
+			continue
+		}
+		if !p.writePackageJSON(dir, name, pkg.Version) {
+			allOk = false
+			continue
+		}
 		if p.isPackageInstalled(name, pkg.Version) {
 			Logger.Info(fmt.Sprintf("npm sync: Package %s@%s already installed, skipping", name, pkg.Version))
 			skippedCount++
@@ -260,19 +270,45 @@ func (p *NPMProvider) Sync() bool {
 			continue
 		}
 		Logger.Info(fmt.Sprintf("npm sync: Installing package %s@%s", name, pkg.Version))
-		installCode, err := npmShellOut("npm", []string{"install", "--no-update-notifier", name + "@" + pkg.Version}, p.APP_PACKAGES_DIR, npmQuietEnv())
-		if err != nil || installCode != 0 {
-			Logger.Info(fmt.Sprintf("error installing %s@%s: %v", name, pkg.Version, err))
-			allOk = false
-		} else {
+		if p.tryNpmCiIn(dir) {
 			installedCount++
 			if err := p.createPackageSymlinks(name); err != nil {
 				Logger.Info(fmt.Sprintf("Error creating symlinks for %s: %v", name, err))
 			}
+			continue
+		}
+		installCode, err := npmShellOut("npm", []string{"install", "--no-update-notifier", name + "@" + pkg.Version}, dir, npmQuietEnv())
+		if err != nil || installCode != 0 {
+			Logger.Info(fmt.Sprintf("error installing %s@%s: %v", name, pkg.Version, err))
+			allOk = false
+			continue
+		}
+		installedCount++
+		if err := p.createPackageSymlinks(name); err != nil {
+			Logger.Info(fmt.Sprintf("Error creating symlinks for %s: %v", name, err))
 		}
 	}
+	p.cleanupLegacyNpmRoot()
 	Logger.Info(fmt.Sprintf("npm sync: Completed - %d packages installed, %d packages skipped", installedCount, skippedCount))
 	return allOk
+}
+
+func (p *NPMProvider) cleanupLegacyNpmRoot() {
+	for _, name := range []string{"package.json", "package-lock.json"} {
+		path := filepath.Join(p.APP_PACKAGES_DIR, name)
+		if _, err := npmStat(path); err == nil {
+			if err := npmRemove(path); err != nil {
+				Logger.Info(fmt.Sprintf("warning: failed to remove leftover %s: %v", path, err))
+			}
+		}
+	}
+	legacyNodeModules := filepath.Join(p.APP_PACKAGES_DIR, "node_modules")
+	if info, err := npmStat(legacyNodeModules); err == nil && info.IsDir() {
+		if err := npmRemoveAll(legacyNodeModules); err != nil {
+			Logger.Info(fmt.Sprintf("warning: failed to remove leftover %s: %v", legacyNodeModules, err))
+		}
+	}
+	_ = p.removeDanglingLegacyNpmSymlinks()
 }
 
 func (p *NPMProvider) getInstalledPackagesFromLock(lockFile string) map[string]string {
@@ -295,7 +331,7 @@ func (p *NPMProvider) getInstalledPackagesFromLock(lockFile string) map[string]s
 }
 
 func (p *NPMProvider) isPackageInstalled(packageName, expectedVersion string) bool {
-	packagePath := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", packageName)
+	packagePath := p.installedPackagePath(packageName)
 	if _, err := os.Stat(packagePath); os.IsNotExist(err) {
 		return false
 	}
@@ -306,45 +342,93 @@ func (p *NPMProvider) isPackageInstalled(packageName, expectedVersion string) bo
 	return pkg.Version == expectedVersion
 }
 
-func (p *NPMProvider) createPackageSymlinks(packageName string) error {
-	nodeModulesPath := filepath.Join(p.APP_PACKAGES_DIR, "node_modules")
-	packagePath := filepath.Join(nodeModulesPath, packageName)
-	pkg, err := p.readPackageJSON(packagePath)
-	if err != nil {
-		return fmt.Errorf("error reading package.json for %s: %v", packageName, err)
+// normalizeNpmBinCommand turns registry bin values like "npm:tsc" into the
+// node_modules/.bin entry name "tsc".
+func (p *NPMProvider) normalizeNpmBinCommand(commandToExec string) string {
+	commandToExec = strings.TrimSpace(commandToExec)
+	if strings.HasPrefix(commandToExec, p.PREFIX) {
+		return strings.TrimPrefix(commandToExec, p.PREFIX)
 	}
-	if len(pkg.Bin) > 0 {
-		binDir := files.GetAppBinPath()
-		for binPath := range pkg.Bin {
-			actualBinPath := filepath.Join(nodeModulesPath, ".bin", binPath)
-			symlinkPath := filepath.Join(binDir, binPath)
-			if _, err := npmLstat(symlinkPath); err == nil {
-				if err := npmRemove(symlinkPath); err != nil {
-					Logger.Info(fmt.Sprintf("warning: failed to remove existing symlink %s: %v", symlinkPath, err))
-				}
+	return commandToExec
+}
+
+// resolveNpmSourceID finds the local package source ID for a package name, or
+// falls back to npm:<name>.
+func (p *NPMProvider) resolveNpmSourceID(packageName string) string {
+	for _, pkg := range lppGetDataForProvider("npm").Packages {
+		if p.getRepo(pkg.SourceID) == packageName {
+			return pkg.SourceID
+		}
+	}
+	return p.PREFIX + packageName
+}
+
+// packageBinMap returns symlinkName → node_modules/.bin target name.
+// Prefers the nvpm registry bin map (supports aliases like tsgo → tsc);
+// falls back to package.json bins when the registry has none.
+func (p *NPMProvider) packageBinMap(packageName string) (map[string]string, error) {
+	parser := registry_parser.NewDefaultRegistryParser()
+	registryItem := parser.GetBySourceId(p.resolveNpmSourceID(packageName))
+	if len(registryItem.Bin) > 0 {
+		bins := make(map[string]string, len(registryItem.Bin))
+		for binName, binCmd := range registryItem.Bin {
+			target := p.normalizeNpmBinCommand(binCmd)
+			if target == "" {
+				continue
 			}
-			Logger.Info(fmt.Sprintf("Creating symlink for %s -> %s\n", symlinkPath, actualBinPath))
-			if err := npmSymlink(actualBinPath, symlinkPath); err != nil {
-				Logger.Info(fmt.Sprintf("error creating symlink for %s: %v", binPath, err))
-				return err
+			bins[binName] = target
+		}
+		return bins, nil
+	}
+
+	pkg, err := p.readPackageJSON(p.installedPackagePath(packageName))
+	if err != nil {
+		return nil, fmt.Errorf("error reading package.json for %s: %v", packageName, err)
+	}
+	bins := make(map[string]string, len(pkg.Bin))
+	for binName := range pkg.Bin {
+		bins[binName] = binName
+	}
+	return bins, nil
+}
+
+func (p *NPMProvider) createPackageSymlinks(packageName string) error {
+	bins, err := p.packageBinMap(packageName)
+	if err != nil {
+		return err
+	}
+	if len(bins) == 0 {
+		return nil
+	}
+	nodeModulesPath := p.nodeModulesDir(packageName)
+	binDir := files.GetAppBinPath()
+	for binName, targetName := range bins {
+		actualBinPath := filepath.Join(nodeModulesPath, ".bin", targetName)
+		symlinkPath := filepath.Join(binDir, binName)
+		if _, err := npmLstat(symlinkPath); err == nil {
+			if err := npmRemove(symlinkPath); err != nil {
+				Logger.Info(fmt.Sprintf("warning: failed to remove existing symlink %s: %v", symlinkPath, err))
 			}
-			if err := npmChmod(symlinkPath, 0755); err != nil {
-				Logger.Info(fmt.Sprintf("error setting executable permissions for %s: %v", binPath, err))
-			}
+		}
+		Logger.Info(fmt.Sprintf("Creating symlink for %s -> %s\n", symlinkPath, actualBinPath))
+		if err := npmSymlink(actualBinPath, symlinkPath); err != nil {
+			Logger.Info(fmt.Sprintf("error creating symlink for %s: %v", binName, err))
+			return err
+		}
+		if err := npmChmod(symlinkPath, 0755); err != nil {
+			Logger.Info(fmt.Sprintf("error setting executable permissions for %s: %v", binName, err))
 		}
 	}
 	return nil
 }
 
 func (p *NPMProvider) removePackageSymlinks(packageName string) error {
-	binDir := files.GetAppBinPath()
-	nodeModulesPath := filepath.Join(p.APP_PACKAGES_DIR, "node_modules")
-	packagePath := filepath.Join(nodeModulesPath, packageName)
-	pkg, err := p.readPackageJSON(packagePath)
+	bins, err := p.packageBinMap(packageName)
 	if err != nil {
 		return nil
 	}
-	for binName := range pkg.Bin {
+	binDir := files.GetAppBinPath()
+	for binName := range bins {
 		symlinkPath := filepath.Join(binDir, binName)
 		if _, err := npmLstat(symlinkPath); err == nil {
 			if err := npmRemove(symlinkPath); err != nil {
@@ -353,6 +437,25 @@ func (p *NPMProvider) removePackageSymlinks(packageName string) error {
 		}
 	}
 	return nil
+}
+
+func (p *NPMProvider) pruneEmptyScopeDir(packageName string) {
+	if !strings.HasPrefix(packageName, "@") {
+		return
+	}
+	parent := filepath.Dir(p.packageDir(packageName))
+	if parent == p.APP_PACKAGES_DIR {
+		return
+	}
+	entries, err := npmReadDir(parent)
+	if err != nil {
+		return
+	}
+	if len(entries) == 0 {
+		if err := npmRemove(parent); err != nil {
+			Logger.Info(fmt.Sprintf("warning: failed to remove empty scope dir %s: %v", parent, err))
+		}
+	}
 }
 
 func (p *NPMProvider) Install(sourceID, version string) bool {
@@ -385,6 +488,10 @@ func (p *NPMProvider) Remove(sourceID string) bool {
 		Logger.Info(fmt.Sprintf("Error removing package %s from local packages: %v", packageName, err))
 		return false
 	}
+	if err := npmRemoveAll(p.packageDir(packageName)); err != nil {
+		Logger.Info(fmt.Sprintf("warning: failed to remove package directory %s: %v", p.packageDir(packageName), err))
+	}
+	p.pruneEmptyScopeDir(packageName)
 	Logger.Info(fmt.Sprintf("npm remove: Package %s removed successfully", packageName))
 	return p.Sync()
 }
@@ -427,13 +534,17 @@ func firstNonNoticeLine(output string) string {
 }
 
 func (p *NPMProvider) tryNpmCi() bool {
-	lockFile := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
+	return p.tryNpmCiIn(p.APP_PACKAGES_DIR)
+}
+
+func (p *NPMProvider) tryNpmCiIn(packageDir string) bool {
+	lockFile := filepath.Join(packageDir, "package-lock.json")
 	if _, err := os.Stat(lockFile); os.IsNotExist(err) {
 		Logger.Info("npm Sync: No package-lock.json found, cannot use npm ci")
 		return false
 	}
 	Logger.Info("npm sync: Using npm ci for faster bulk installation")
-	installCode, err := npmShellOut("npm", []string{"ci", "--no-update-notifier"}, p.APP_PACKAGES_DIR, npmQuietEnv())
+	installCode, err := npmShellOut("npm", []string{"ci", "--no-update-notifier"}, packageDir, npmQuietEnv())
 	if err != nil || installCode != 0 {
 		Logger.Info(fmt.Sprintf("npm sync: npm ci failed, falling back to individual package installation: %v", err))
 		return false
@@ -443,8 +554,12 @@ func (p *NPMProvider) tryNpmCi() bool {
 }
 
 func (p *NPMProvider) hasPackageJSONChanged() bool {
-	packageJSONFile := filepath.Join(p.APP_PACKAGES_DIR, "package.json")
-	lockFile := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
+	return p.hasPackageJSONChangedIn(p.APP_PACKAGES_DIR)
+}
+
+func (p *NPMProvider) hasPackageJSONChangedIn(dir string) bool {
+	packageJSONFile := filepath.Join(dir, "package.json")
+	lockFile := filepath.Join(dir, "package-lock.json")
 	if _, err := npmStat(packageJSONFile); os.IsNotExist(err) {
 		return true
 	}

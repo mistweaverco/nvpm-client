@@ -31,7 +31,8 @@ var gemLstat = os.Lstat
 var gemRemove = os.Remove
 var gemChmod = os.Chmod
 var gemStat = os.Stat
-var gemMkdir = os.Mkdir
+var gemMkdirAll = os.MkdirAll
+var gemRemoveAll = os.RemoveAll
 var gemWriteFile = os.WriteFile
 var gemClose = func(f *os.File) error { return f.Close() }
 
@@ -65,46 +66,47 @@ func (p *GemProvider) getRepo(sourceID string) string {
 	return ""
 }
 
+func (p *GemProvider) packageDir(gemName string) string {
+	return filepath.Join(p.APP_PACKAGES_DIR, gemName)
+}
+
 func (p *GemProvider) generateGemfile() bool {
 	found := false
-	gemfileContent := make([]string, 0)
 	localPackages := lppGemGetData(true).Packages
 	for _, pkg := range localPackages {
 		if detectProvider(pkg.SourceID) != ProviderGem {
 			continue
 		}
 		gemName := p.getRepo(pkg.SourceID)
+		if gemName == "" {
+			continue
+		}
+		dir := p.packageDir(gemName)
+		if err := gemMkdirAll(dir, 0755); err != nil {
+			Logger.Error(fmt.Sprintf("Error creating directory %s: %s", dir, err))
+			return false
+		}
+		line := fmt.Sprintf("gem '%s'\n", gemName)
 		if pkg.Version != "" && pkg.Version != "latest" {
-			gemfileContent = append(gemfileContent, fmt.Sprintf("gem '%s', '~> %s'", gemName, pkg.Version))
-		} else {
-			gemfileContent = append(gemfileContent, fmt.Sprintf("gem '%s'", gemName))
+			line = fmt.Sprintf("gem '%s', '~> %s'\n", gemName, pkg.Version)
 		}
-		found = true
-	}
-	if !found {
-		return false
-	}
-
-	filePath := filepath.Join(p.APP_PACKAGES_DIR, "Gemfile")
-	file, err := gemCreate(filePath)
-	if err != nil {
-		Logger.Error(fmt.Sprintf("Error creating Gemfile: %s", err))
-		return false
-	}
-	defer func() {
-		if closeErr := gemClose(file); closeErr != nil {
-			_ = fmt.Errorf("warning: failed to close Gemfile: %v", closeErr)
+		filePath := filepath.Join(dir, "Gemfile")
+		file, err := gemCreate(filePath)
+		if err != nil {
+			Logger.Error(fmt.Sprintf("Error creating Gemfile: %s", err))
+			return false
 		}
-	}()
-
-	// Write Gemfile content
-	for _, line := range gemfileContent {
-		if _, err := file.WriteString(line + "\n"); err != nil {
+		if _, err := file.WriteString(line); err != nil {
+			_ = gemClose(file)
 			Logger.Error(fmt.Sprintf("Error writing to Gemfile: %s", err))
 			return false
 		}
+		if closeErr := gemClose(file); closeErr != nil {
+			_ = fmt.Errorf("warning: failed to close Gemfile: %v", closeErr)
+		}
+		found = true
 	}
-	return true
+	return found
 }
 
 func (p *GemProvider) Install(sourceID, version string) bool {
@@ -119,14 +121,13 @@ func (p *GemProvider) Install(sourceID, version string) bool {
 		return false
 	}
 
-	// Ensure packages directory exists
-	if err := gemMkdir(p.APP_PACKAGES_DIR, 0755); err != nil && !os.IsExist(err) {
+	dir := p.packageDir(gemName)
+	if err := gemMkdirAll(dir, 0755); err != nil {
 		Logger.Error(fmt.Sprintf("Gem Install: Error creating packages directory: %v", err))
 		return false
 	}
 
-	// Build gem install command
-	args := []string{"install", gemName, "--install-dir", p.APP_PACKAGES_DIR, "--no-document", "--no-user-install"}
+	args := []string{"install", gemName, "--install-dir", dir, "--no-document", "--no-user-install"}
 	if version != "" && version != "latest" {
 		args = append(args, "--version", version)
 	}
@@ -142,7 +143,7 @@ func (p *GemProvider) Install(sourceID, version string) bool {
 	installedVersion := version
 	if installedVersion == "" || installedVersion == "latest" {
 		// Try to get the installed version
-		code, output, err := gemShellOutCapture(gemCmd, []string{"list", gemName, "--install-dir", p.APP_PACKAGES_DIR}, "", nil)
+		code, output, err := gemShellOutCapture(gemCmd, []string{"list", gemName, "--install-dir", dir}, "", nil)
 		if err == nil && code == 0 {
 			// Parse output like "gemname (1.2.3)"
 			lines := strings.Split(output, "\n")
@@ -177,6 +178,7 @@ func (p *GemProvider) Install(sourceID, version string) bool {
 		Logger.Info(fmt.Sprintf("Gem Install: Warning creating wrappers: %v", err))
 		// Don't fail installation if wrappers fail
 	}
+	p.cleanupLegacyGemRoot()
 
 	Logger.Info(fmt.Sprintf("Gem Install: Successfully installed %s@%s", gemName, installedVersion))
 	return true
@@ -202,7 +204,7 @@ func (p *GemProvider) Remove(sourceID string) bool {
 	}
 
 	// Uninstall gem
-	args := []string{"uninstall", gemName, "--install-dir", p.APP_PACKAGES_DIR, "--executables", "--ignore-dependencies"}
+	args := []string{"uninstall", gemName, "--install-dir", p.packageDir(gemName), "--executables", "--ignore-dependencies"}
 	code, err := gemShellOut(gemCmd, args, "", nil)
 	if err != nil || code != 0 {
 		Logger.Info(fmt.Sprintf("Gem Remove: Warning uninstalling gem (may not be installed): %v", err))
@@ -213,6 +215,9 @@ func (p *GemProvider) Remove(sourceID string) bool {
 	if err := lppGemRemove(sourceID); err != nil {
 		Logger.Error(fmt.Sprintf("Gem Remove: Error removing package from local packages: %v", err))
 		return false
+	}
+	if err := gemRemoveAll(p.packageDir(gemName)); err != nil {
+		Logger.Info(fmt.Sprintf("Gem Remove: Warning removing package directory: %v", err))
 	}
 
 	// Regenerate Gemfile
@@ -237,7 +242,8 @@ func (p *GemProvider) Update(sourceID string) bool {
 	Logger.Info(fmt.Sprintf("Gem Update: Updating %s", gemName))
 
 	// Update gem to latest version
-	args := []string{"update", gemName, "--install-dir", p.APP_PACKAGES_DIR, "--no-document", "--no-user-install"}
+	dir := p.packageDir(gemName)
+	args := []string{"update", gemName, "--install-dir", dir, "--no-document", "--no-user-install"}
 	code, err := gemShellOut(gemCmd, args, "", nil)
 	if err != nil || code != 0 {
 		Logger.Error(fmt.Sprintf("Gem Update: Error updating gem: %v", err))
@@ -245,7 +251,7 @@ func (p *GemProvider) Update(sourceID string) bool {
 	}
 
 	// Get updated version
-	code, output, err := gemShellOutCapture(gemCmd, []string{"list", gemName, "--install-dir", p.APP_PACKAGES_DIR}, "", nil)
+	code, output, err := gemShellOutCapture(gemCmd, []string{"list", gemName, "--install-dir", p.packageDir(gemName)}, "", nil)
 	var updatedVersion string
 	if err == nil && code == 0 {
 		lines := strings.Split(output, "\n")
@@ -312,12 +318,11 @@ func (p *GemProvider) getLatestVersion(packageName string) (string, error) {
 
 // findGemBinDir finds the gem bin directory
 func (p *GemProvider) findGemBinDir() string {
-	// Gems install executables to: APP_PACKAGES_DIR/bin
-	binDir := filepath.Join(p.APP_PACKAGES_DIR, "bin")
-	if _, err := gemStat(binDir); err == nil {
-		return binDir
-	}
-	return binDir // Return even if it doesn't exist yet, it will be created
+	return p.findGemBinDirIn(p.APP_PACKAGES_DIR)
+}
+
+func (p *GemProvider) findGemBinDirIn(prefixDir string) string {
+	return filepath.Join(prefixDir, "bin")
 }
 
 // createWrappers creates wrapper scripts for gem executables
@@ -334,13 +339,14 @@ func (p *GemProvider) createWrappers() error {
 		if len(registryItem.Bin) == 0 {
 			continue
 		}
+		prefixDir := p.packageDir(p.getRepo(pkg.SourceID))
 		for binName, binCmd := range registryItem.Bin {
 			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			// Remove any existing wrapper with the same name to avoid conflicts
 			if _, err := gemLstat(wrapperPath); err == nil {
 				_ = gemRemove(wrapperPath)
 			}
-			if err := p.createGemWrapperForCommand(binCmd, wrapperPath); err != nil {
+			if err := p.createGemWrapperForPrefix(binCmd, wrapperPath, prefixDir); err != nil {
 				Logger.Error(fmt.Sprintf("Error creating wrapper for %s: %v", binName, err))
 				continue
 			}
@@ -354,42 +360,40 @@ func (p *GemProvider) createWrappers() error {
 
 // createGemWrapperForCommand creates a wrapper that prepares the environment and executes the given command
 func (p *GemProvider) createGemWrapperForCommand(commandToExec string, wrapperPath string) error {
-	gemBinDir := p.findGemBinDir()
+	return p.createGemWrapperForPrefix(commandToExec, wrapperPath, p.APP_PACKAGES_DIR)
+}
+
+func (p *GemProvider) createGemWrapperForPrefix(commandToExec string, wrapperPath string, prefixDir string) error {
+	if prefixDir == "" {
+		prefixDir = p.APP_PACKAGES_DIR
+	}
+	gemBinDir := p.findGemBinDirIn(prefixDir)
 	if commandToExec == "" {
 		return fmt.Errorf("empty command for wrapper %s", wrapperPath)
 	}
 
-	// Ruby gems typically use the gem's bin directory directly
-	// The command might be a path like "ruby:libexec/binary" or just "binary"
 	var execCmd string
 	if strings.HasPrefix(commandToExec, "ruby:") {
-		// Extract the path after "ruby:"
 		execPath := strings.TrimPrefix(commandToExec, "ruby:")
-		// Find the gem installation directory
-		gemLibDir := filepath.Join(p.APP_PACKAGES_DIR, "gems")
-		// Search for the executable in installed gems
+		gemLibDir := filepath.Join(prefixDir, "gems")
 		execCmd = p.findGemExecutable(gemLibDir, execPath)
 		if execCmd == "" {
-			// Fallback: try to construct path
-			execCmd = filepath.Join(p.APP_PACKAGES_DIR, execPath)
+			execCmd = filepath.Join(prefixDir, execPath)
 		}
 	} else {
-		// Direct binary name - look in gem bin directory
 		execCmd = filepath.Join(gemBinDir, commandToExec)
 	}
 
 	wrapperContent := fmt.Sprintf(`#!/bin/sh
 # Sets up Ruby/Gem environment for nvpm-installed packages and runs the target command
 
-# Add the nvpm gem bin directory to PATH
+export GEM_HOME="%s"
+export GEM_PATH="%s"
 export PATH="%s:$PATH"
-
-# Add gem lib directories to RUBYLIB
 export RUBYLIB="%s:$RUBYLIB"
 
-# Execute the command from registry
 exec %s "$@"
-`, gemBinDir, p.APP_PACKAGES_DIR, execCmd)
+`, prefixDir, prefixDir, gemBinDir, prefixDir, execCmd)
 
 	if err := gemWriteFile(wrapperPath, []byte(wrapperContent), 0755); err != nil {
 		return err
@@ -438,63 +442,90 @@ func (p *GemProvider) removeWrappersForGem(gemName string) error {
 	return nil
 }
 
+func (p *GemProvider) isGemInstalled(gemName, version string) bool {
+	specDir := filepath.Join(p.packageDir(gemName), "specifications")
+	entries, err := gemReadDir(specDir)
+	if err != nil {
+		return false
+	}
+	prefix := gemName + "-"
+	if version != "" && version != "latest" {
+		prefix = gemName + "-" + version
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".gemspec") || !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		rest := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".gemspec")
+		if rest == "" || strings.HasPrefix(rest, "-") {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *GemProvider) cleanupLegacyGemRoot() {
+	rootGemfile := filepath.Join(p.APP_PACKAGES_DIR, "Gemfile")
+	if _, err := gemStat(rootGemfile); err == nil {
+		_ = gemRemove(rootGemfile)
+	}
+	rootLock := filepath.Join(p.APP_PACKAGES_DIR, "Gemfile.lock")
+	if _, err := gemStat(rootLock); err == nil {
+		_ = gemRemove(rootLock)
+	}
+	for _, name := range []string{"bin", "gems", "specifications", "cache", "extensions", "doc", "bundler"} {
+		path := filepath.Join(p.APP_PACKAGES_DIR, name)
+		if _, err := gemStat(path); err == nil {
+			_ = gemRemoveAll(path)
+		}
+	}
+}
+
 func (p *GemProvider) Sync() bool {
 	Logger.Info("Gem Sync: Syncing gem packages")
 	localPackages := lppGemGetDataForProvider(p.PROVIDER_NAME).Packages
 
 	if len(localPackages) == 0 {
+		p.cleanupLegacyGemRoot()
 		return true
 	}
 
-	// Check for gem command before proceeding
 	if !gemHasCommand("gem", []string{"--version"}, nil) {
 		Logger.Error("Gem Sync: gem command not found. Please install Ruby and RubyGems.")
 		return false
 	}
 
-	// Regenerate Gemfile
-	if !p.generateGemfile() {
-		Logger.Error("Gem Sync: Failed to generate Gemfile")
-		return false
-	}
-
-	// Install all packages using bundle install
-	gemfilePath := filepath.Join(p.APP_PACKAGES_DIR, "Gemfile")
-	if _, err := gemStat(gemfilePath); os.IsNotExist(err) {
-		Logger.Error("Gem Sync: Gemfile not found")
-		return false
-	}
-
-	// Use bundle install if available, otherwise use gem install for each package
-	if gemHasCommand("bundle", []string{"--version"}, nil) {
-		code, err := gemShellOut("bundle", []string{"install", "--gemfile", gemfilePath, "--path", p.APP_PACKAGES_DIR}, p.APP_PACKAGES_DIR, nil)
+	allOk := true
+	for _, pkg := range localPackages {
+		gemName := p.getRepo(pkg.SourceID)
+		if gemName == "" {
+			continue
+		}
+		dir := p.packageDir(gemName)
+		if err := gemMkdirAll(dir, 0755); err != nil {
+			Logger.Error(fmt.Sprintf("Gem Sync: Error creating directory %s: %v", dir, err))
+			allOk = false
+			continue
+		}
+		if p.isGemInstalled(gemName, pkg.Version) {
+			continue
+		}
+		args := []string{"install", gemName, "--install-dir", dir, "--no-document", "--no-user-install"}
+		if pkg.Version != "" && pkg.Version != "latest" {
+			args = append(args, "--version", pkg.Version)
+		}
+		code, err := gemShellOut(gemCmd, args, "", nil)
 		if err != nil || code != 0 {
-			Logger.Error(fmt.Sprintf("Gem Sync: Error running bundle install: %v", err))
-			return false
-		}
-	} else {
-		// Fallback: install each gem individually
-		for _, pkg := range localPackages {
-			gemName := p.getRepo(pkg.SourceID)
-			if gemName == "" {
-				continue
-			}
-			args := []string{"install", gemName, "--install-dir", p.APP_PACKAGES_DIR, "--no-document", "--no-user-install"}
-			if pkg.Version != "" && pkg.Version != "latest" {
-				args = append(args, "--version", pkg.Version)
-			}
-			code, err := gemShellOut(gemCmd, args, "", nil)
-			if err != nil || code != 0 {
-				Logger.Error(fmt.Sprintf("Gem Sync: Error installing %s: %v", gemName, err))
-				return false
-			}
+			Logger.Error(fmt.Sprintf("Gem Sync: Error installing %s: %v", gemName, err))
+			allOk = false
 		}
 	}
 
-	// Recreate wrappers
+	_ = p.generateGemfile()
 	if err := p.createWrappers(); err != nil {
 		Logger.Info(fmt.Sprintf("Gem Sync: Warning creating wrappers: %v", err))
 	}
-
-	return true
+	p.cleanupLegacyGemRoot()
+	return allOk
 }

@@ -33,6 +33,8 @@ var composerRemove = os.Remove
 var composerChmod = os.Chmod
 var composerStat = os.Stat
 var composerMkdirAll = os.MkdirAll
+var composerRemoveAll = os.RemoveAll
+var composerReadDir = os.ReadDir
 var composerWriteFile = os.WriteFile
 var composerClose = func(f *os.File) error { return f.Close() }
 
@@ -65,33 +67,23 @@ func (p *ComposerProvider) getRepo(sourceID string) string {
 	return ""
 }
 
-func (p *ComposerProvider) generateComposerJSON() bool {
-	found := false
+func (p *ComposerProvider) packageDir(packageName string) string {
+	return filepath.Join(p.APP_PACKAGES_DIR, packageName)
+}
+
+func (p *ComposerProvider) writeComposerJSON(dir, packageName, version string) bool {
 	composerJSON := struct {
 		Require map[string]string `json:"require"`
 	}{
 		Require: make(map[string]string),
 	}
-
-	localPackages := lppComposerGetData(true).Packages
-	for _, pkg := range localPackages {
-		if detectProvider(pkg.SourceID) != ProviderComposer {
-			continue
-		}
-		packageName := p.getRepo(pkg.SourceID)
-		if pkg.Version != "" && pkg.Version != "latest" {
-			composerJSON.Require[packageName] = "^" + pkg.Version
-		} else {
-			composerJSON.Require[packageName] = "*"
-		}
-		found = true
+	if version != "" && version != "latest" {
+		composerJSON.Require[packageName] = "^" + version
+	} else {
+		composerJSON.Require[packageName] = "*"
 	}
 
-	if !found {
-		return false
-	}
-
-	filePath := filepath.Join(p.APP_PACKAGES_DIR, "composer.json")
+	filePath := filepath.Join(dir, "composer.json")
 	file, err := composerCreate(filePath)
 	if err != nil {
 		Logger.Error(fmt.Sprintf("Error creating composer.json: %s", err))
@@ -105,13 +97,35 @@ func (p *ComposerProvider) generateComposerJSON() bool {
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	err = encoder.Encode(composerJSON)
-	if err != nil {
+	if err := encoder.Encode(composerJSON); err != nil {
 		Logger.Error(fmt.Sprintf("Error encoding composer.json: %s", err))
 		return false
 	}
-
 	return true
+}
+
+func (p *ComposerProvider) generateComposerJSON() bool {
+	found := false
+	localPackages := lppComposerGetData(true).Packages
+	for _, pkg := range localPackages {
+		if detectProvider(pkg.SourceID) != ProviderComposer {
+			continue
+		}
+		packageName := p.getRepo(pkg.SourceID)
+		if packageName == "" {
+			continue
+		}
+		dir := p.packageDir(packageName)
+		if err := composerMkdirAll(dir, 0755); err != nil {
+			Logger.Error(fmt.Sprintf("Error creating directory %s: %s", dir, err))
+			return false
+		}
+		if !p.writeComposerJSON(dir, packageName, pkg.Version) {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 func (p *ComposerProvider) Install(sourceID, version string) bool {
@@ -126,8 +140,8 @@ func (p *ComposerProvider) Install(sourceID, version string) bool {
 		return false
 	}
 
-	// Ensure packages directory exists
-	if err := composerMkdirAll(p.APP_PACKAGES_DIR, 0755); err != nil {
+	dir := p.packageDir(packageName)
+	if err := composerMkdirAll(dir, 0755); err != nil {
 		Logger.Error(fmt.Sprintf("Composer Install: Error creating packages directory: %v", err))
 		return false
 	}
@@ -139,7 +153,7 @@ func (p *ComposerProvider) Install(sourceID, version string) bool {
 	}
 
 	Logger.Info(fmt.Sprintf("Composer Install: Installing %s@%s", packageName, version))
-	code, err := composerShellOut(composerCmd, []string{"require", packageSpec, "--no-interaction", "--no-plugins", "--no-scripts"}, p.APP_PACKAGES_DIR, nil)
+	code, err := composerShellOut(composerCmd, []string{"require", packageSpec, "--no-interaction", "--no-plugins", "--no-scripts"}, dir, nil)
 	if err != nil || code != 0 {
 		Logger.Error(fmt.Sprintf("Composer Install: Error installing package: %v", err))
 		return false
@@ -149,7 +163,7 @@ func (p *ComposerProvider) Install(sourceID, version string) bool {
 	installedVersion := version
 	if installedVersion == "" || installedVersion == "latest" {
 		// Try to read from composer.lock
-		lockPath := filepath.Join(p.APP_PACKAGES_DIR, "composer.lock")
+		lockPath := filepath.Join(dir, "composer.lock")
 		if lockData, err := composerReadFile(lockPath); err == nil {
 			var lock struct {
 				Packages []struct {
@@ -184,6 +198,7 @@ func (p *ComposerProvider) Install(sourceID, version string) bool {
 	if err := p.createWrappers(); err != nil {
 		Logger.Info(fmt.Sprintf("Composer Install: Warning creating wrappers: %v", err))
 	}
+	p.cleanupLegacyComposerRoot()
 
 	Logger.Info(fmt.Sprintf("Composer Install: Successfully installed %s@%s", packageName, installedVersion))
 	return true
@@ -208,8 +223,8 @@ func (p *ComposerProvider) Remove(sourceID string) bool {
 		Logger.Info(fmt.Sprintf("Composer Remove: Warning removing wrappers: %v", err))
 	}
 
-	// Remove package using composer
-	code, err := composerShellOut(composerCmd, []string{"remove", packageName, "--no-interaction", "--no-plugins", "--no-scripts"}, p.APP_PACKAGES_DIR, nil)
+	dir := p.packageDir(packageName)
+	code, err := composerShellOut(composerCmd, []string{"remove", packageName, "--no-interaction", "--no-plugins", "--no-scripts"}, dir, nil)
 	if err != nil || code != 0 {
 		Logger.Info(fmt.Sprintf("Composer Remove: Warning removing package (may not be installed): %v", err))
 	}
@@ -219,6 +234,10 @@ func (p *ComposerProvider) Remove(sourceID string) bool {
 		Logger.Error(fmt.Sprintf("Composer Remove: Error removing package from local packages: %v", err))
 		return false
 	}
+	if err := composerRemoveAll(dir); err != nil {
+		Logger.Info(fmt.Sprintf("Composer Remove: Warning removing package directory: %v", err))
+	}
+	p.pruneEmptyVendorDir(packageName)
 
 	// Regenerate composer.json
 	_ = p.generateComposerJSON()
@@ -241,8 +260,8 @@ func (p *ComposerProvider) Update(sourceID string) bool {
 
 	Logger.Info(fmt.Sprintf("Composer Update: Updating %s", packageName))
 
-	// Update package using composer
-	code, err := composerShellOut(composerCmd, []string{"update", packageName, "--no-interaction", "--no-plugins", "--no-scripts"}, p.APP_PACKAGES_DIR, nil)
+	dir := p.packageDir(packageName)
+	code, err := composerShellOut(composerCmd, []string{"update", packageName, "--no-interaction", "--no-plugins", "--no-scripts"}, dir, nil)
 	if err != nil || code != 0 {
 		Logger.Error(fmt.Sprintf("Composer Update: Error updating package: %v", err))
 		return false
@@ -250,7 +269,7 @@ func (p *ComposerProvider) Update(sourceID string) bool {
 
 	// Get updated version
 	var updatedVersion string
-	lockPath := filepath.Join(p.APP_PACKAGES_DIR, "composer.lock")
+	lockPath := filepath.Join(dir, "composer.lock")
 	if lockData, err := composerReadFile(lockPath); err == nil {
 		var lock struct {
 			Packages []struct {
@@ -321,14 +340,30 @@ func (p *ComposerProvider) getLatestVersion(packageName string) (string, error) 
 	return "", fmt.Errorf("version not found")
 }
 
-// findComposerBinDir finds the composer bin directory
 func (p *ComposerProvider) findComposerBinDir() string {
-	// Composer installs binaries to: APP_PACKAGES_DIR/vendor/bin
-	binDir := filepath.Join(p.APP_PACKAGES_DIR, "vendor", "bin")
-	if _, err := composerStat(binDir); err == nil {
-		return binDir
+	return p.findComposerBinDirIn(p.APP_PACKAGES_DIR)
+}
+
+func (p *ComposerProvider) findComposerBinDirIn(prefixDir string) string {
+	return filepath.Join(prefixDir, "vendor", "bin")
+}
+
+func (p *ComposerProvider) isComposerPackageInstalled(packageName string) bool {
+	vendorPkg := filepath.Join(p.packageDir(packageName), "vendor", packageName)
+	_, err := composerStat(vendorPkg)
+	return err == nil
+}
+
+func (p *ComposerProvider) pruneEmptyVendorDir(packageName string) {
+	parent := filepath.Dir(p.packageDir(packageName))
+	if parent == p.APP_PACKAGES_DIR || parent == "." || parent == string(filepath.Separator) {
+		return
 	}
-	return binDir // Return even if it doesn't exist yet
+	entries, err := composerReadDir(parent)
+	if err != nil || len(entries) > 0 {
+		return
+	}
+	_ = composerRemove(parent)
 }
 
 // createWrappers creates wrapper scripts for composer executables
@@ -344,12 +379,13 @@ func (p *ComposerProvider) createWrappers() error {
 		if len(registryItem.Bin) == 0 {
 			continue
 		}
+		prefixDir := p.packageDir(p.getRepo(pkg.SourceID))
 		for binName, binCmd := range registryItem.Bin {
 			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := composerLstat(wrapperPath); err == nil {
 				_ = composerRemove(wrapperPath)
 			}
-			if err := p.createComposerWrapperForCommand(binCmd, wrapperPath); err != nil {
+			if err := p.createComposerWrapperForPrefix(binCmd, wrapperPath, prefixDir); err != nil {
 				Logger.Error(fmt.Sprintf("Error creating wrapper for %s: %v", binName, err))
 				continue
 			}
@@ -363,8 +399,15 @@ func (p *ComposerProvider) createWrappers() error {
 
 // createComposerWrapperForCommand creates a wrapper that prepares the environment and executes the given command
 func (p *ComposerProvider) createComposerWrapperForCommand(commandToExec string, wrapperPath string) error {
-	composerBinDir := p.findComposerBinDir()
-	vendorDir := filepath.Join(p.APP_PACKAGES_DIR, "vendor")
+	return p.createComposerWrapperForPrefix(commandToExec, wrapperPath, p.APP_PACKAGES_DIR)
+}
+
+func (p *ComposerProvider) createComposerWrapperForPrefix(commandToExec string, wrapperPath string, prefixDir string) error {
+	if prefixDir == "" {
+		prefixDir = p.APP_PACKAGES_DIR
+	}
+	composerBinDir := p.findComposerBinDirIn(prefixDir)
+	vendorDir := filepath.Join(prefixDir, "vendor")
 	if commandToExec == "" {
 		return fmt.Errorf("empty command for wrapper %s", wrapperPath)
 	}
@@ -420,43 +463,66 @@ func (p *ComposerProvider) removeWrappersForPackage(packageName string) error {
 	return nil
 }
 
+func (p *ComposerProvider) cleanupLegacyComposerRoot() {
+	for _, name := range []string{"composer.json", "composer.lock"} {
+		path := filepath.Join(p.APP_PACKAGES_DIR, name)
+		if _, err := composerStat(path); err == nil {
+			_ = composerRemove(path)
+		}
+	}
+	legacyVendor := filepath.Join(p.APP_PACKAGES_DIR, "vendor")
+	if _, err := composerStat(filepath.Join(legacyVendor, "autoload.php")); err == nil {
+		_ = composerRemoveAll(legacyVendor)
+	}
+}
+
 func (p *ComposerProvider) Sync() bool {
 	Logger.Info("Composer Sync: Syncing composer packages")
 	localPackages := lppComposerGetDataForProvider(p.PROVIDER_NAME).Packages
 
 	if len(localPackages) == 0 {
+		p.cleanupLegacyComposerRoot()
 		return true
 	}
 
-	// Check for composer command before proceeding
 	if !composerHasCommand("composer", []string{"--version"}, nil) {
 		Logger.Error("Composer Sync: composer command not found. Please install Composer.")
 		return false
 	}
 
-	// Regenerate composer.json
-	if !p.generateComposerJSON() {
-		Logger.Error("Composer Sync: Failed to generate composer.json")
-		return false
+	allOk := true
+	for _, pkg := range localPackages {
+		packageName := p.getRepo(pkg.SourceID)
+		if packageName == "" {
+			continue
+		}
+		dir := p.packageDir(packageName)
+		if err := composerMkdirAll(dir, 0755); err != nil {
+			Logger.Error(fmt.Sprintf("Composer Sync: Error creating directory %s: %v", dir, err))
+			allOk = false
+			continue
+		}
+		if !p.writeComposerJSON(dir, packageName, pkg.Version) {
+			allOk = false
+			continue
+		}
+		if p.isComposerPackageInstalled(packageName) {
+			continue
+		}
+		packageSpec := packageName
+		if pkg.Version != "" && pkg.Version != "latest" {
+			packageSpec = fmt.Sprintf("%s:^%s", packageName, pkg.Version)
+		}
+		code, err := composerShellOut(composerCmd, []string{"require", packageSpec, "--no-interaction", "--no-plugins", "--no-scripts"}, dir, nil)
+		if err != nil || code != 0 {
+			Logger.Error(fmt.Sprintf("Composer Sync: Error installing %s: %v", packageName, err))
+			allOk = false
+		}
 	}
 
-	// Install all packages using composer install
-	composerJSONPath := filepath.Join(p.APP_PACKAGES_DIR, "composer.json")
-	if _, err := composerStat(composerJSONPath); os.IsNotExist(err) {
-		Logger.Error("Composer Sync: composer.json not found")
-		return false
-	}
-
-	code, err := composerShellOut(composerCmd, []string{"install", "--no-interaction", "--no-plugins", "--no-scripts"}, p.APP_PACKAGES_DIR, nil)
-	if err != nil || code != 0 {
-		Logger.Error(fmt.Sprintf("Composer Sync: Error running composer install: %v", err))
-		return false
-	}
-
-	// Recreate wrappers
 	if err := p.createWrappers(); err != nil {
 		Logger.Info(fmt.Sprintf("Composer Sync: Warning creating wrappers: %v", err))
 	}
-
-	return true
+	p.cleanupLegacyComposerRoot()
+	return allOk
 }

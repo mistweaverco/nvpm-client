@@ -9,8 +9,23 @@ import (
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/stretchr/testify/assert"
 )
+
+func plantNpmInstalled(t *testing.T, p *NPMProvider, name, version, binName string) {
+	t.Helper()
+	nm := filepath.Join(p.packageDir(name), "node_modules")
+	pkgDir := filepath.Join(nm, name)
+	assert.NoError(t, os.MkdirAll(filepath.Join(nm, ".bin"), 0755))
+	assert.NoError(t, os.MkdirAll(pkgDir, 0755))
+	pkgJSON := `{"name":"` + name + `","version":"` + version + `"}`
+	if binName != "" {
+		pkgJSON = `{"name":"` + name + `","version":"` + version + `","bin":{"` + binName + `":"./bin/` + binName + `.js"}}`
+		assert.NoError(t, os.WriteFile(filepath.Join(nm, ".bin", binName), []byte(""), 0755))
+	}
+	assert.NoError(t, os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(pkgJSON), 0644))
+}
 
 func TestNPMErrorBranches(t *testing.T) {
 	_ = withTempNvpmHome(t)
@@ -62,12 +77,7 @@ func TestNPMErrorBranches(t *testing.T) {
 	npmStat = oldStat2
 
 	// createPackageSymlinks symlink error and chmod error branches
-	// prepare a fake package.json
-	nm := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "pkg")
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	_ = os.MkdirAll(nm, 0755)
-	pkgJSON := `{"name":"pkg","version":"1.0.0","bin":{"tool":"./bin/tool.js"}}`
-	assert.NoError(t, os.WriteFile(filepath.Join(nm, "package.json"), []byte(pkgJSON), 0644))
+	plantNpmInstalled(t, p, "pkg", "1.0.0", "tool")
 
 	// existing symlink removal error
 	oldL := npmLstat
@@ -114,21 +124,7 @@ func TestPushingRemainingBranchesTo100(t *testing.T) {
 	np := NewProviderNPM()
 	_ = os.MkdirAll(np.APP_PACKAGES_DIR, 0755)
 	_ = local_packages_parser.AddLocalPackage("pkg:npm/a", "1.0.0")
-	// desired
-	pkgPath := filepath.Join(np.APP_PACKAGES_DIR, "package.json")
-	assert.NoError(t, os.WriteFile(pkgPath, []byte("{}"), 0644))
-	// lock newer matching
-	lock := filepath.Join(np.APP_PACKAGES_DIR, "package-lock.json")
-	lockData := `{"dependencies":{"a":{"version":"1.0.0"}}}`
-	assert.NoError(t, os.WriteFile(lock, []byte(lockData), 0644))
-	now := time.Now()
-	_ = os.Chtimes(lock, now.Add(1*time.Hour), now.Add(1*time.Hour))
-	// create node_modules bin so createPackageSymlinks can run
-	_ = os.MkdirAll(filepath.Join(np.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	nm := filepath.Join(np.APP_PACKAGES_DIR, "node_modules", "a")
-	_ = os.MkdirAll(nm, 0755)
-	assert.NoError(t, os.WriteFile(filepath.Join(nm, "package.json"), []byte(`{"name":"a","version":"1.0.0","bin":{"a":"./bin/a.js"}}`), 0644))
-	// fast path
+	plantNpmInstalled(t, np, "a", "1.0.0", "a")
 	assert.True(t, np.Sync())
 
 	// needsUpdate: change desired version and simulate ci success
@@ -198,34 +194,18 @@ func TestNPMNeedsUpdateCiFailThenInstallIndividually(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
-	// desired v2.0.0
 	_ = lppAdd("pkg:npm/a", "2.0.0")
-	// lock newer with v1.0.0
-	pkgPath := filepath.Join(p.APP_PACKAGES_DIR, "package.json")
-	_ = os.WriteFile(pkgPath, []byte("{}"), 0644)
-	lock := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
-	_ = os.WriteFile(lock, []byte(`{"dependencies":{"a":{"version":"1.0.0"}}}`), 0644)
-	now := time.Now()
-	_ = os.Chtimes(lock, now.Add(1*time.Hour), now.Add(1*time.Hour))
-	// prepare node_modules/a package.json and .bin target
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	nm := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "a")
-	_ = os.MkdirAll(nm, 0755)
-	_ = os.WriteFile(filepath.Join(nm, "package.json"), []byte(`{"name":"a","version":"2.0.0","bin":{"a":"./bin/a.js"}}`), 0644)
-	// tryNpmCi should fail
+	dir := p.packageDir("a")
+	_ = os.MkdirAll(dir, 0755)
+	_ = os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(`{"dependencies":{"a":{"version":"1.0.0"}}}`), 0644)
 	oldOut := npmShellOut
 	npmShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
 		if len(args) > 0 && args[0] == "ci" {
 			return 1, errors.New("ci")
 		}
-		// install individually succeeds
 		return 0, nil
 	}
-	// lock removal error should be tolerated
-	oldRm := npmRemove
-	npmRemove = func(string) error { return errors.New("rm") }
 	assert.True(t, p.Sync())
-	npmRemove = oldRm
 	npmShellOut = oldOut
 }
 
@@ -234,29 +214,21 @@ func TestNPMAllConditionalsToggle(t *testing.T) {
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
-	// Case 1: generatePackageJSON returns false -> Sync returns true
-	oldGet := lppGetData
-	lppGetData = func(bool) local_packages_parser.LocalPackageRoot {
+	// Case 1: no packages -> Sync returns true
+	oldGet := lppGetDataForProvider
+	lppGetDataForProvider = func(string) local_packages_parser.LocalPackageRoot {
 		return local_packages_parser.LocalPackageRoot{Packages: nil}
 	}
 	assert.True(t, p.Sync())
-	lppGetData = oldGet
+	lppGetDataForProvider = oldGet
 
-	// Setup desired package a@2.0.0, lock newer with 1.0.0 to trigger needsUpdate
+	// Setup desired package a@2.0.0 not yet installed, with a lockfile so ci is attempted
 	_ = lppAdd("pkg:npm/a", "2.0.0")
-	pkgPath := filepath.Join(p.APP_PACKAGES_DIR, "package.json")
-	_ = os.WriteFile(pkgPath, []byte("{}"), 0644)
-	lock := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
-	_ = os.WriteFile(lock, []byte(`{"dependencies":{"a":{"version":"1.0.0"}}}`), 0644)
-	now := time.Now()
-	_ = os.Chtimes(lock, now.Add(1*time.Hour), now.Add(1*time.Hour))
-	// Ensure bin dirs exist
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	an := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "a")
-	_ = os.MkdirAll(an, 0755)
-	_ = os.WriteFile(filepath.Join(an, "package.json"), []byte(`{"name":"a","version":"2.0.0","bin":{"a":"./bin/a.js"}}`), 0644)
+	dir := p.packageDir("a")
+	_ = os.MkdirAll(dir, 0755)
+	_ = os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte(`{"dependencies":{"a":{"version":"1.0.0"}}}`), 0644)
 
-	// Case 2: needsUpdate with ci success -> returns true early
+	// Case 2: ci success -> returns true
 	oldOut := npmShellOut
 	npmShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
 		if len(args) > 0 && args[0] == "ci" {
@@ -268,13 +240,9 @@ func TestNPMAllConditionalsToggle(t *testing.T) {
 	npmShellOut = oldOut
 
 	// Case 3: Installing individually path with install failure -> returns false
-	// Remove lock to skip lockExists branches
-	_ = os.Remove(lock)
-	// Desired b@1.0.0 not installed
+	_ = os.Remove(filepath.Join(dir, "package-lock.json"))
 	_ = lppAdd("pkg:npm/b", "1.0.0")
-	bn := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "b")
-	_ = os.MkdirAll(bn, 0755)
-	_ = os.WriteFile(filepath.Join(bn, "package.json"), []byte(`{"name":"b","version":"0.9.0","bin":{"b":"./bin/b.js"}}`), 0644)
+	plantNpmInstalled(t, p, "b", "0.9.0", "b")
 	oldOut2 := npmShellOut
 	npmShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
 		return 1, errors.New("install")
@@ -346,49 +314,38 @@ func TestNPMCleanLogsErrorOnRemoveSymlinks(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
-	oldRD, oldRA, oldStat, oldMkdir, oldGet := npmReadDir, npmRemoveAll, npmStat, npmMkdir, lppGetData
+	oldRD, oldRA, oldStat, oldMkdirAll, oldGet := npmReadDir, npmRemoveAll, npmStat, npmMkdirAll, lppGetDataForProvider
 	// make removeAllSymlinks error
 	npmReadDir = func(string) ([]os.DirEntry, error) { return nil, errors.New("readdir") }
 	// allow directory remove to succeed
 	npmRemoveAll = func(string) error { return nil }
 	// Sync path: make directory creation succeed and no packages found
 	npmStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
-	npmMkdir = func(string, os.FileMode) error { return nil }
-	lppGetData = func(bool) local_packages_parser.LocalPackageRoot {
+	npmMkdirAll = func(string, os.FileMode) error { return nil }
+	lppGetDataForProvider = func(string) local_packages_parser.LocalPackageRoot {
 		return local_packages_parser.LocalPackageRoot{Packages: nil}
 	}
 	assert.True(t, p.Clean())
 	// restore
-	npmReadDir, npmRemoveAll, npmStat, npmMkdir, lppGetData = oldRD, oldRA, oldStat, oldMkdir, oldGet
+	npmReadDir, npmRemoveAll, npmStat, npmMkdirAll, lppGetDataForProvider = oldRD, oldRA, oldStat, oldMkdirAll, oldGet
 }
 
 func TestNPMSyncCreateDirError(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
-	oldStat, oldMkdir := npmStat, npmMkdir
+	oldStat, oldMkdirAll := npmStat, npmMkdirAll
 	npmStat = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
-	npmMkdir = func(string, os.FileMode) error { return errors.New("mkdir") }
+	npmMkdirAll = func(string, os.FileMode) error { return errors.New("mkdir") }
 	assert.False(t, p.Sync())
-	npmStat, npmMkdir = oldStat, oldMkdir
+	npmStat, npmMkdirAll = oldStat, oldMkdirAll
 }
 
 func TestNPMFastPathLogsCreateSymlinkErrors(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
-	// desired a@1.0.0
 	_ = lppAdd("pkg:npm/a", "1.0.0")
-	// package.json and newer lock with matching version
-	_ = os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "package.json"), []byte("{}"), 0644)
-	lock := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
-	_ = os.WriteFile(lock, []byte(`{"dependencies":{"a":{"version":"1.0.0"}}}`), 0644)
-	_ = os.Chtimes(lock, time.Now().Add(1*time.Hour), time.Now().Add(1*time.Hour))
-	// node_modules setup with bin
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	an := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "a")
-	_ = os.MkdirAll(an, 0755)
-	_ = os.WriteFile(filepath.Join(an, "package.json"), []byte(`{"name":"a","version":"1.0.0","bin":{"a":"./bin/a.js"}}`), 0644)
-	// force symlink creation to fail so the log path is taken
+	plantNpmInstalled(t, p, "a", "1.0.0", "a")
 	oldSym := npmSymlink
 	npmSymlink = func(string, string) error { return errors.New("sym") }
 	assert.True(t, p.Sync())
@@ -413,14 +370,12 @@ func TestNPMInstallAndRemovePermutations(t *testing.T) {
 	// isPackageInstalled false when dir missing
 	assert.False(t, p.isPackageInstalled("none", "1.0.0"))
 	// false when readPackageJSON fails
-	dir := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "broken")
+	dir := filepath.Join(p.packageDir("broken"), "node_modules", "broken")
 	_ = os.MkdirAll(dir, 0755)
 	_ = os.WriteFile(filepath.Join(dir, "package.json"), []byte("{"), 0644)
 	assert.False(t, p.isPackageInstalled("broken", "1.0.0"))
 	// true when versions match
-	okd := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "ok")
-	_ = os.MkdirAll(okd, 0755)
-	_ = os.WriteFile(filepath.Join(okd, "package.json"), []byte(`{"name":"ok","version":"1.0.0"}`), 0644)
+	plantNpmInstalled(t, p, "ok", "1.0.0", "")
 	assert.True(t, p.isPackageInstalled("ok", "1.0.0"))
 
 	// hasPackageJSONChanged false when lock newer
@@ -433,11 +388,7 @@ func TestNPMInstallAndRemovePermutations(t *testing.T) {
 	assert.False(t, p.hasPackageJSONChanged())
 
 	// createPackageSymlinks chmod success
-	// Setup a package with bin
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	pa := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "pkg")
-	_ = os.MkdirAll(pa, 0755)
-	_ = os.WriteFile(filepath.Join(pa, "package.json"), []byte(`{"name":"pkg","version":"1.0.0","bin":{"cli":"./bin/cli.js"}}`), 0644)
+	plantNpmInstalled(t, p, "pkg", "1.0.0", "cli")
 	oldCh := npmChmod
 	npmChmod = func(string, os.FileMode) error { return nil }
 	assert.NoError(t, p.createPackageSymlinks("pkg"))
@@ -452,12 +403,15 @@ func TestNPMInstallAndRemovePermutations(t *testing.T) {
 	npmLstat, npmRemove = oldLs, oldRm
 
 	// Install success returns true even if createPackageSymlinks fails afterwards
-	oldGet := lppGetData
-	lppGetData = func(bool) local_packages_parser.LocalPackageRoot {
+	oldGet := lppGetDataForProvider
+	oldOut := npmShellOut
+	lppGetDataForProvider = func(string) local_packages_parser.LocalPackageRoot {
 		return local_packages_parser.LocalPackageRoot{Packages: nil}
 	}
+	npmShellOut = func(string, []string, string, []string) (int, error) { return 0, nil }
 	assert.True(t, p.Install("pkg:npm/pkg", "1.0.0"))
-	lppGetData = oldGet
+	lppGetDataForProvider = oldGet
+	npmShellOut = oldOut
 
 	// Remove success (lppRemove ok) with Sync returning true from empty desired
 	assert.True(t, p.Remove("pkg:npm/pkg"))
@@ -500,20 +454,20 @@ func TestNPMGeneratePackageJSONCreateErrorAndCleanHappy(t *testing.T) {
 	// Clean happy path: removeAll ok, remove dir ok, Sync returns true because no packages
 	oldRmAll := npmRemoveAll
 	oldStat := npmStat
-	oldMkdir := npmMkdir
-	oldGet := lppGetData
+	oldMkdirAll := npmMkdirAll
+	oldGet := lppGetDataForProvider
 	npmRemoveAll = func(string) error { return nil }
 	npmStat = func(name string) (os.FileInfo, error) { return nil, os.ErrNotExist }
-	npmMkdir = func(string, os.FileMode) error { return nil }
-	lppGetData = func(bool) local_packages_parser.LocalPackageRoot {
+	npmMkdirAll = func(string, os.FileMode) error { return nil }
+	lppGetDataForProvider = func(string) local_packages_parser.LocalPackageRoot {
 		return local_packages_parser.LocalPackageRoot{Packages: nil}
 	}
 	assert.True(t, p.Clean())
 	// restore
 	npmRemoveAll = oldRmAll
 	npmStat = oldStat
-	npmMkdir = oldMkdir
-	lppGetData = oldGet
+	npmMkdirAll = oldMkdirAll
+	lppGetDataForProvider = oldGet
 }
 
 func TestNPMFastPathMultiPackageSymlinkLoop(t *testing.T) {
@@ -521,24 +475,10 @@ func TestNPMFastPathMultiPackageSymlinkLoop(t *testing.T) {
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 
-	// desired a@1.0.0 and b@2.0.0
 	_ = lppAdd("pkg:npm/a", "1.0.0")
 	_ = lppAdd("pkg:npm/b", "2.0.0")
-	// create package.json and a newer lock with both versions matching
-	pkgPath := filepath.Join(p.APP_PACKAGES_DIR, "package.json")
-	_ = os.WriteFile(pkgPath, []byte("{}"), 0644)
-	lock := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
-	_ = os.WriteFile(lock, []byte(`{"dependencies":{"a":{"version":"1.0.0"},"b":{"version":"2.0.0"}}}`), 0644)
-	now := time.Now()
-	_ = os.Chtimes(lock, now.Add(1*time.Hour), now.Add(1*time.Hour))
-	// node_modules setup with bins for both
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	an := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "a")
-	bn := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "b")
-	_ = os.MkdirAll(an, 0755)
-	_ = os.MkdirAll(bn, 0755)
-	_ = os.WriteFile(filepath.Join(an, "package.json"), []byte(`{"name":"a","version":"1.0.0","bin":{"a":"./bin/a.js"}}`), 0644)
-	_ = os.WriteFile(filepath.Join(bn, "package.json"), []byte(`{"name":"b","version":"2.0.0","bin":{"b":"./bin/b.js"}}`), 0644)
+	plantNpmInstalled(t, p, "a", "1.0.0", "a")
+	plantNpmInstalled(t, p, "b", "2.0.0", "b")
 	assert.True(t, p.Sync())
 }
 
@@ -548,17 +488,8 @@ func TestNPMFastPathMultiPackageSymlinkLoopWithSymlinkErrors(t *testing.T) {
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	_ = lppAdd("pkg:npm/a", "1.0.0")
 	_ = lppAdd("pkg:npm/b", "2.0.0")
-	_ = os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "package.json"), []byte("{}"), 0644)
-	lock := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
-	_ = os.WriteFile(lock, []byte(`{"dependencies":{"a":{"version":"1.0.0"},"b":{"version":"2.0.0"}}}`), 0644)
-	_ = os.Chtimes(lock, time.Now().Add(1*time.Hour), time.Now().Add(1*time.Hour))
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	an := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "a")
-	bn := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "b")
-	_ = os.MkdirAll(an, 0755)
-	_ = os.MkdirAll(bn, 0755)
-	_ = os.WriteFile(filepath.Join(an, "package.json"), []byte(`{"name":"a","version":"1.0.0","bin":{"a":"./bin/a.js"}}`), 0644)
-	_ = os.WriteFile(filepath.Join(bn, "package.json"), []byte(`{"name":"b","version":"2.0.0","bin":{"b":"./bin/b.js"}}`), 0644)
+	plantNpmInstalled(t, p, "a", "1.0.0", "a")
+	plantNpmInstalled(t, p, "b", "2.0.0", "b")
 	oldSym := npmSymlink
 	npmSymlink = func(string, string) error { return errors.New("sym") }
 	assert.True(t, p.Sync())
@@ -571,17 +502,8 @@ func TestNPMFastPathMultiPackageSymlinkLoopSuccess(t *testing.T) {
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	_ = lppAdd("pkg:npm/a", "1.0.0")
 	_ = lppAdd("pkg:npm/b", "2.0.0")
-	_ = os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "package.json"), []byte("{}"), 0644)
-	lock := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
-	_ = os.WriteFile(lock, []byte(`{"dependencies":{"a":{"version":"1.0.0"},"b":{"version":"2.0.0"}}}`), 0644)
-	_ = os.Chtimes(lock, time.Now().Add(1*time.Hour), time.Now().Add(1*time.Hour))
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	an := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "a")
-	bn := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "b")
-	_ = os.MkdirAll(an, 0755)
-	_ = os.MkdirAll(bn, 0755)
-	_ = os.WriteFile(filepath.Join(an, "package.json"), []byte(`{"name":"a","version":"1.0.0","bin":{"a":"./bin/a.js"}}`), 0644)
-	_ = os.WriteFile(filepath.Join(bn, "package.json"), []byte(`{"name":"b","version":"2.0.0","bin":{"b":"./bin/b.js"}}`), 0644)
+	plantNpmInstalled(t, p, "a", "1.0.0", "a")
+	plantNpmInstalled(t, p, "b", "2.0.0", "b")
 	oldCh := npmChmod
 	npmChmod = func(string, os.FileMode) error { return nil }
 	assert.True(t, p.Sync())
@@ -592,72 +514,25 @@ func TestNPMFastPathSecondLoopAllInstalled(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
-	// desired
 	_ = lppAdd("pkg:npm/a", "1.0.0")
 	_ = lppAdd("pkg:npm/b", "2.0.0")
-	// actual files (their real modtimes won't matter due to npmStat stub)
-	_ = os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "package.json"), []byte("{}"), 0644)
-	_ = os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json"), []byte(`{"dependencies":{"a":{"version":"1.0.0"},"b":{"version":"2.0.0"}}}`), 0644)
-	// setup node_modules with bins
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	an := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "a")
-	bn := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "b")
-	_ = os.MkdirAll(an, 0755)
-	_ = os.MkdirAll(bn, 0755)
-	_ = os.WriteFile(filepath.Join(an, "package.json"), []byte(`{"name":"a","version":"1.0.0","bin":{"a":"./bin/a.js"}}`), 0644)
-	_ = os.WriteFile(filepath.Join(bn, "package.json"), []byte(`{"name":"b","version":"2.0.0","bin":{"b":"./bin/b.js"}}`), 0644)
-
-	// Create controlled fi for lock newer and pkg older; also ensure hasPackageJSONChanged returns false
-	tmp := t.TempDir()
-	fakeLock := filepath.Join(tmp, "lock")
-	fakePkg := filepath.Join(tmp, "pkg")
-	_ = os.WriteFile(fakeLock, []byte("x"), 0644)
-	_ = os.WriteFile(fakePkg, []byte("x"), 0644)
-	_ = os.Chtimes(fakeLock, time.Now().Add(2*time.Hour), time.Now().Add(2*time.Hour))
-	_ = os.Chtimes(fakePkg, time.Now(), time.Now())
-	oldStat := npmStat
-	npmStat = func(name string) (os.FileInfo, error) {
-		switch filepath.Base(name) {
-		case "package-lock.json":
-			fi, _ := os.Stat(fakeLock)
-			return fi, nil
-		case "package.json":
-			fi, _ := os.Stat(fakePkg)
-			return fi, nil
-		default:
-			return oldStat(name)
-		}
-	}
+	plantNpmInstalled(t, p, "a", "1.0.0", "a")
+	plantNpmInstalled(t, p, "b", "2.0.0", "b")
 	oldCh := npmChmod
 	npmChmod = func(string, os.FileMode) error { return nil }
-
 	assert.True(t, p.Sync())
 	npmChmod = oldCh
-	npmStat = oldStat
 }
 
 func TestNPMFastPathAllInstalledCallsSymlinkForEachPackage(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
-	// desired packages
 	_ = lppAdd("pkg:npm/a", "1.0.0")
 	_ = lppAdd("pkg:npm/b", "2.0.0")
-	// package.json and lock newer matching
-	_ = os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "package.json"), []byte("{}"), 0644)
-	lock := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
-	_ = os.WriteFile(lock, []byte(`{"dependencies":{"a":{"version":"1.0.0"},"b":{"version":"2.0.0"}}}`), 0644)
-	_ = os.Chtimes(lock, time.Now().Add(1*time.Hour), time.Now().Add(1*time.Hour))
-	// node_modules with bin for both packages
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	an := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "a")
-	bn := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "b")
-	_ = os.MkdirAll(an, 0755)
-	_ = os.MkdirAll(bn, 0755)
-	_ = os.WriteFile(filepath.Join(an, "package.json"), []byte(`{"name":"a","version":"1.0.0","bin":{"a":"./bin/a.js"}}`), 0644)
-	_ = os.WriteFile(filepath.Join(bn, "package.json"), []byte(`{"name":"b","version":"2.0.0","bin":{"b":"./bin/b.js"}}`), 0644)
+	plantNpmInstalled(t, p, "a", "1.0.0", "a")
+	plantNpmInstalled(t, p, "b", "2.0.0", "b")
 
-	// Capture which symlinks were attempted to verify loop over desired
 	called := map[string]int{}
 	oldSym := npmSymlink
 	npmSym := func(oldname, newname string) error {
@@ -670,7 +545,6 @@ func TestNPMFastPathAllInstalledCallsSymlinkForEachPackage(t *testing.T) {
 	npmChmod = func(string, os.FileMode) error { return nil }
 
 	assert.True(t, p.Sync())
-	// Expect both a and b symlink attempts
 	assert.GreaterOrEqual(t, called["a"], 1)
 	assert.GreaterOrEqual(t, called["b"], 1)
 
@@ -682,29 +556,18 @@ func TestNPMFastPathAllInstalledMixedSymlinkSuccessAndError(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
-	// desired packages
 	_ = lppAdd("pkg:npm/a", "1.0.0")
 	_ = lppAdd("pkg:npm/b", "2.0.0")
-	// package.json and lock (lock newer)
-	pkgPath := filepath.Join(p.APP_PACKAGES_DIR, "package.json")
-	lock := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
-	_ = os.WriteFile(pkgPath, []byte("{}"), 0644)
-	_ = os.WriteFile(lock, []byte(`{"dependencies":{"a":{"version":"1.0.0"},"b":{"version":"2.0.0"}}}`), 0644)
-	now := time.Now()
-	_ = os.Chtimes(pkgPath, now, now)
-	_ = os.Chtimes(lock, now.Add(1*time.Hour), now.Add(1*time.Hour))
-	// node_modules with valid a and invalid b to force error on b
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	an := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "a")
-	bn := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "b")
-	_ = os.MkdirAll(an, 0755)
+	plantNpmInstalled(t, p, "a", "1.0.0", "a")
+	bn := filepath.Join(p.packageDir("b"), "node_modules", "b")
 	_ = os.MkdirAll(bn, 0755)
-	_ = os.WriteFile(filepath.Join(an, "package.json"), []byte(`{"name":"a","version":"1.0.0","bin":{"a":"./bin/a.js"}}`), 0644)
-	_ = os.WriteFile(filepath.Join(bn, "package.json"), []byte("{"), 0644) // invalid JSON -> error path
-	// ensure chmod does not fail for the success package
+	_ = os.WriteFile(filepath.Join(bn, "package.json"), []byte("{"), 0644)
 	oldCh := npmChmod
 	npmChmod = func(string, os.FileMode) error { return nil }
+	oldOut := npmShellOut
+	npmShellOut = func(string, []string, string, []string) (int, error) { return 0, nil }
 	assert.True(t, p.Sync())
+	npmShellOut = oldOut
 	npmChmod = oldCh
 }
 
@@ -722,11 +585,7 @@ func TestNPMSkipPathSymlinkError(t *testing.T) {
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
 	_ = lppAdd("pkg:npm/a", "1.0.0")
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	an := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "a")
-	_ = os.MkdirAll(an, 0755)
-	_ = os.WriteFile(filepath.Join(an, "package.json"), []byte(`{"name":"a","version":"1.0.0","bin":{"a":"./bin/a.js"}}`), 0644)
-	// No lock file so it goes to individual install path; mark package installed so skip branch executes
+	plantNpmInstalled(t, p, "a", "1.0.0", "a")
 	oldSym := npmSymlink
 	npmSymlink = func(string, string) error { return errors.New("sym") }
 	assert.True(t, p.Sync())
@@ -756,17 +615,10 @@ func TestNPMRemoveLogsSymlinkRemovalError(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
-	// Prepare node_modules/pkg with a bin so removePackageSymlinks will try to remove
-	binDir := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin")
-	_ = os.MkdirAll(binDir, 0755)
-	pkgDir := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "pkg")
-	_ = os.MkdirAll(pkgDir, 0755)
-	_ = os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"name":"pkg","version":"1.0.0","bin":{"cli":"./bin/cli.js"}}`), 0644)
-	// Force symlink removal error and ensure removePackageSymlinks returns error to trigger log in Remove
+	plantNpmInstalled(t, p, "pkg", "1.0.0", "cli")
 	oldLs, oldRm := npmLstat, npmRemove
 	npmLstat = func(string) (os.FileInfo, error) { return fileInfoNow(t), nil }
 	npmRemove = func(string) error { return errors.New("rm") }
-	// Ensure local removal succeeds
 	oldLR := lppRemove
 	lppRemove = func(string) error { return nil }
 	assert.True(t, p.Remove("pkg:npm/pkg"))
@@ -778,10 +630,7 @@ func TestNPMInstallIndividualPathSymlinkError(t *testing.T) {
 	_ = withTempNvpmHome(t)
 	p := NewProviderNPM()
 	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
-	// desired d@1.0.0 not installed
 	_ = lppAdd("pkg:npm/d", "1.0.0")
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	// install succeeds
 	oldOut := npmShellOut
 	npmShellOut = func(string, []string, string, []string) (int, error) { return 0, nil }
 	assert.True(t, p.Sync())
@@ -825,13 +674,7 @@ func TestNPMProviderBasicFlows(t *testing.T) {
 	assert.True(t, ok)
 
 	// create node_modules package.json for bin
-	nm := filepath.Join(p.APP_PACKAGES_DIR, "node_modules", "eslint")
-	_ = os.MkdirAll(nm, 0755)
-	_ = os.MkdirAll(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin"), 0755)
-	// create actual bin target to avoid chmod errors
-	assert.NoError(t, os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "node_modules", ".bin", "eslint"), []byte(""), 0755))
-	pkgJSON := `{"name":"eslint","version":"1.0.0","bin":{"eslint":"./bin/eslint.js"}}`
-	assert.NoError(t, os.WriteFile(filepath.Join(nm, "package.json"), []byte(pkgJSON), 0644))
+	plantNpmInstalled(t, p, "eslint", "1.0.0", "eslint")
 
 	// isPackageInstalled true/false
 	assert.True(t, p.isPackageInstalled("eslint", "1.0.0"))
@@ -844,19 +687,17 @@ func TestNPMProviderBasicFlows(t *testing.T) {
 	assert.NoError(t, p.removePackageSymlinks("eslint"))
 
 	// getInstalledPackagesFromLock
-	lock := filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json")
+	lock := filepath.Join(p.packageDir("eslint"), "package-lock.json")
 	lockData := `{"dependencies":{"eslint":{"version":"1.0.0"}}}`
 	assert.NoError(t, os.WriteFile(lock, []byte(lockData), 0644))
 	inst := p.getInstalledPackagesFromLock(lock)
 	assert.Equal(t, "1.0.0", inst["eslint"])
-	// ensure lock is newer than package.json so fast-path is taken
-	pkgPath := filepath.Join(p.APP_PACKAGES_DIR, "package.json")
+	pkgPath := filepath.Join(p.packageDir("eslint"), "package.json")
 	assert.NoError(t, os.WriteFile(pkgPath, []byte("{}"), 0644))
 	now := time.Now()
 	_ = os.Chtimes(lock, now.Add(1*time.Hour), now.Add(1*time.Hour))
 
-	// tryNpmCi: lock exists and stub returns success
-	assert.True(t, p.tryNpmCi())
+	assert.True(t, p.tryNpmCiIn(p.packageDir("eslint")))
 	// failure path
 	npmShellOut = func(cmd string, args []string, dir string, env []string) (int, error) { return 1, nil }
 	assert.False(t, p.tryNpmCi())
@@ -907,4 +748,235 @@ func TestFirstNonNoticeLine(t *testing.T) {
 	assert.Equal(t, "1.2.3", firstNonNoticeLine("npm notice New version\n1.2.3\nnpm notice\n"))
 	assert.Equal(t, "", firstNonNoticeLine("npm notice only\n"))
 	assert.Equal(t, "", firstNonNoticeLine(""))
+}
+
+func TestNPMPerPackageIsolationAndBinTargets(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderNPM()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	_ = os.MkdirAll(files.GetAppBinPath(), 0755)
+
+	_ = lppAdd("npm:svelte-language-server", "0.16.0")
+	_ = lppAdd("npm:typescript", "7.0.0")
+	plantNpmInstalled(t, p, "svelte-language-server", "0.16.0", "svelteserver")
+	plantNpmInstalled(t, p, "typescript", "7.0.0", "tsc")
+	// Conflicting peer: svelte-language-server keeps typescript@6 in its own tree.
+	peer := filepath.Join(p.packageDir("svelte-language-server"), "node_modules", "typescript")
+	_ = os.MkdirAll(peer, 0755)
+	assert.NoError(t, os.WriteFile(filepath.Join(peer, "package.json"), []byte(`{"name":"typescript","version":"6.0.0"}`), 0644))
+
+	assert.True(t, p.Sync())
+
+	svelteTS, err := os.ReadFile(filepath.Join(peer, "package.json"))
+	assert.NoError(t, err)
+	assert.Contains(t, string(svelteTS), `"6.0.0"`)
+	topTS, err := os.ReadFile(filepath.Join(p.packageDir("typescript"), "node_modules", "typescript", "package.json"))
+	assert.NoError(t, err)
+	assert.Contains(t, string(topTS), `"7.0.0"`)
+
+	svelteserver, err := os.Readlink(filepath.Join(files.GetAppBinPath(), "svelteserver"))
+	assert.NoError(t, err)
+	assert.Contains(t, svelteserver, filepath.Join("packages", "npm", "svelte-language-server", "node_modules", ".bin", "svelteserver"))
+	tsc, err := os.Readlink(filepath.Join(files.GetAppBinPath(), "tsc"))
+	assert.NoError(t, err)
+	assert.Contains(t, tsc, filepath.Join("packages", "npm", "typescript", "node_modules", ".bin", "tsc"))
+}
+
+func TestNPMScopedPackageContainer(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderNPM()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	name := "@vue/language-server"
+	_ = lppAdd("npm:"+name, "2.0.0")
+	plantNpmInstalled(t, p, name, "2.0.0", "vue-language-server")
+	assert.True(t, p.Sync())
+	_, err := os.Stat(p.packageDir(name))
+	assert.NoError(t, err)
+	link, err := os.Readlink(filepath.Join(files.GetAppBinPath(), "vue-language-server"))
+	assert.NoError(t, err)
+	assert.Contains(t, link, filepath.Join("packages", "npm", "@vue", "language-server"))
+}
+
+func TestNPMSyncMigratesLegacySharedTree(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderNPM()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	_ = os.MkdirAll(files.GetAppBinPath(), 0755)
+	_ = lppAdd("npm:typescript", "7.0.0")
+
+	assert.NoError(t, os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "package.json"), []byte(`{"dependencies":{"typescript":"7.0.0"}}`), 0644))
+	assert.NoError(t, os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json"), []byte(`{"dependencies":{"typescript":{"version":"7.0.0"}}}`), 0644))
+	legacyNM := filepath.Join(p.APP_PACKAGES_DIR, "node_modules")
+	_ = os.MkdirAll(filepath.Join(legacyNM, "typescript"), 0755)
+	assert.NoError(t, os.WriteFile(filepath.Join(legacyNM, "typescript", "package.json"), []byte(`{"name":"typescript","version":"7.0.0","bin":{"tsc":"./bin/tsc"}}`), 0644))
+	_ = os.MkdirAll(filepath.Join(legacyNM, ".bin"), 0755)
+	assert.NoError(t, os.WriteFile(filepath.Join(legacyNM, ".bin", "tsc"), []byte(""), 0755))
+	legacyLink := filepath.Join(files.GetAppBinPath(), "tsc")
+	assert.NoError(t, os.Symlink(filepath.Join(legacyNM, ".bin", "tsc"), legacyLink))
+
+	oldOut := npmShellOut
+	npmShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
+		plantNpmInstalled(t, p, "typescript", "7.0.0", "tsc")
+		return 0, nil
+	}
+	assert.True(t, p.Sync())
+	npmShellOut = oldOut
+
+	_, err := os.Stat(filepath.Join(p.APP_PACKAGES_DIR, "package.json"))
+	assert.Error(t, err)
+	_, err = os.Stat(filepath.Join(p.APP_PACKAGES_DIR, "package-lock.json"))
+	assert.Error(t, err)
+	_, err = os.Stat(legacyNM)
+	assert.Error(t, err)
+	_, err = os.Stat(p.packageDir("typescript"))
+	assert.NoError(t, err)
+
+	target, err := os.Readlink(legacyLink)
+	assert.NoError(t, err)
+	assert.Contains(t, target, filepath.Join("packages", "npm", "typescript", "node_modules", ".bin", "tsc"))
+}
+
+func TestNPMInstallMigratesPackageIntoContainer(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderNPM()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	_ = os.MkdirAll(files.GetAppBinPath(), 0755)
+
+	assert.NoError(t, os.WriteFile(filepath.Join(p.APP_PACKAGES_DIR, "package.json"), []byte(`{}`), 0644))
+	legacyNM := filepath.Join(p.APP_PACKAGES_DIR, "node_modules")
+	_ = os.MkdirAll(filepath.Join(legacyNM, "typescript"), 0755)
+	assert.NoError(t, os.WriteFile(filepath.Join(legacyNM, "typescript", "package.json"), []byte(`{"name":"typescript","version":"5.0.0"}`), 0644))
+
+	oldOut := npmShellOut
+	npmShellOut = func(cmd string, args []string, dir string, env []string) (int, error) {
+		plantNpmInstalled(t, p, "typescript", "7.0.0", "tsc")
+		return 0, nil
+	}
+	assert.True(t, p.Install("npm:typescript", "7.0.0"))
+	npmShellOut = oldOut
+
+	_, err := os.Stat(legacyNM)
+	assert.Error(t, err)
+	_, err = os.Stat(p.packageDir("typescript"))
+	assert.NoError(t, err)
+	target, err := os.Readlink(filepath.Join(files.GetAppBinPath(), "tsc"))
+	assert.NoError(t, err)
+	assert.Contains(t, target, filepath.Join("packages", "npm", "typescript"))
+}
+
+func TestNPMRemoveDeletesContainerAndBinLink(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderNPM()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	_ = os.MkdirAll(files.GetAppBinPath(), 0755)
+	_ = lppAdd("npm:eslint", "1.0.0")
+	plantNpmInstalled(t, p, "eslint", "1.0.0", "eslint")
+	assert.True(t, p.Sync())
+	_, err := os.Lstat(filepath.Join(files.GetAppBinPath(), "eslint"))
+	assert.NoError(t, err)
+
+	assert.True(t, p.Remove("npm:eslint"))
+	_, err = os.Stat(p.packageDir("eslint"))
+	assert.Error(t, err)
+	_, err = os.Lstat(filepath.Join(files.GetAppBinPath(), "eslint"))
+	assert.Error(t, err)
+}
+
+func TestNPMRemovePrunesEmptyScopeDir(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderNPM()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	name := "@scope/pkg"
+	_ = lppAdd("npm:"+name, "1.0.0")
+	plantNpmInstalled(t, p, name, "1.0.0", "pkg")
+	assert.True(t, p.Remove("npm:"+name))
+	_, err := os.Stat(filepath.Join(p.APP_PACKAGES_DIR, "@scope"))
+	assert.Error(t, err)
+}
+
+func TestNPMRemoveAllSymlinksLeavesNonNpmBins(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	p := NewProviderNPM()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	binDir := files.GetAppBinPath()
+	_ = os.MkdirAll(binDir, 0755)
+	other := filepath.Join(binDir, "gopls")
+	assert.NoError(t, os.WriteFile(other, []byte("#!/bin/sh\n"), 0755))
+	_ = lppAdd("npm:eslint", "1.0.0")
+	plantNpmInstalled(t, p, "eslint", "1.0.0", "eslint")
+	assert.NoError(t, p.createPackageSymlinks("eslint"))
+	assert.NoError(t, p.removeAllSymlinks())
+	_, err := os.Stat(other)
+	assert.NoError(t, err)
+	_, err = os.Lstat(filepath.Join(binDir, "eslint"))
+	assert.Error(t, err)
+}
+
+func TestNPMCreatePackageSymlinksUsesRegistryBinAliases(t *testing.T) {
+	_ = withTempNvpmHome(t)
+
+	p := NewProviderNPM()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	_ = local_packages_parser.AddLocalPackage("npm:typescript", "5.0.0")
+
+	writeRegistry(t, []registry_parser.RegistryItem{{
+		Name:    "typescript",
+		Version: "5.0.0",
+		Source:  registry_parser.RegistryItemSource{ID: "npm:typescript"},
+		Bin: map[string]string{
+			"tsc":  "npm:tsc",
+			"tsgo": "npm:tsc",
+		},
+	}})
+	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
+
+	plantNpmInstalled(t, p, "typescript", "5.0.0", "tsc")
+	containerBin := filepath.Join(p.nodeModulesDir("typescript"), ".bin")
+
+	assert.NoError(t, p.createPackageSymlinks("typescript"))
+
+	appBin := files.GetAppBinPath()
+	tscLink := filepath.Join(appBin, "tsc")
+	tsgoLink := filepath.Join(appBin, "tsgo")
+	tscTarget, err := os.Readlink(tscLink)
+	assert.NoError(t, err)
+	tsgoTarget, err := os.Readlink(tsgoLink)
+	assert.NoError(t, err)
+	assert.Equal(t, filepath.Join(containerBin, "tsc"), tscTarget)
+	assert.Equal(t, filepath.Join(containerBin, "tsc"), tsgoTarget)
+
+	assert.NoError(t, p.removePackageSymlinks("typescript"))
+	_, err = os.Lstat(tscLink)
+	assert.True(t, os.IsNotExist(err))
+	_, err = os.Lstat(tsgoLink)
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestNPMCreatePackageSymlinksIgnoresPackageJSONBinsWhenRegistryPresent(t *testing.T) {
+	_ = withTempNvpmHome(t)
+
+	p := NewProviderNPM()
+	_ = os.MkdirAll(p.APP_PACKAGES_DIR, 0755)
+	_ = lppAdd("npm:typescript", "5.0.0")
+	writeRegistry(t, []registry_parser.RegistryItem{{
+		Name:    "typescript",
+		Version: "5.0.0",
+		Source:  registry_parser.RegistryItemSource{ID: "npm:typescript"},
+		Bin:     map[string]string{"tsc": "npm:tsc"},
+	}})
+	_ = registry_parser.NewDefaultRegistryParser().GetData(true)
+
+	plantNpmInstalled(t, p, "typescript", "5.0.0", "tsc")
+	nm := p.nodeModulesDir("typescript")
+	pkgJSON := `{"name":"typescript","version":"5.0.0","bin":{"tsc":"./bin/tsc","tsserver":"./bin/tsserver"}}`
+	assert.NoError(t, os.WriteFile(filepath.Join(nm, "typescript", "package.json"), []byte(pkgJSON), 0644))
+	assert.NoError(t, os.WriteFile(filepath.Join(nm, ".bin", "tsserver"), []byte("#!/bin/sh\n"), 0755))
+
+	assert.NoError(t, p.createPackageSymlinks("typescript"))
+
+	appBin := files.GetAppBinPath()
+	_, err := os.Lstat(filepath.Join(appBin, "tsc"))
+	assert.NoError(t, err)
+	_, err = os.Lstat(filepath.Join(appBin, "tsserver"))
+	assert.True(t, os.IsNotExist(err))
 }

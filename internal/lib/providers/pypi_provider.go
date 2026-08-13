@@ -32,7 +32,7 @@ var pipLstat = os.Lstat
 var pipRemove = os.Remove
 var pipChmod = os.Chmod
 var pipStat = os.Stat
-var pipMkdir = os.Mkdir
+var pipMkdirAll = os.MkdirAll
 var pipRemoveAll = os.RemoveAll
 var pipWriteFile = os.WriteFile
 var pipClose = func(f *os.File) error { return f.Close() }
@@ -100,34 +100,44 @@ func (p *PyPiProvider) getRepo(sourceID string) string {
 	return ""
 }
 
+// packageDir is the per-package container under packages/pypi/<name>.
+func (p *PyPiProvider) packageDir(packageName string) string {
+	return filepath.Join(p.APP_PACKAGES_DIR, packageName)
+}
+
 func (p *PyPiProvider) generateRequirementsTxt() bool {
 	found := false
-	dependenciesTxt := make([]string, 0)
 	localPackages := lppPyGetData(true).Packages
 	for _, pkg := range localPackages {
 		if detectProvider(pkg.SourceID) != ProviderPyPi {
 			continue
 		}
-		dependenciesTxt = append(dependenciesTxt, fmt.Sprintf("%s==%s", p.getRepo(pkg.SourceID), pkg.Version))
-		found = true
-	}
-	filePath := filepath.Join(p.APP_PACKAGES_DIR, "requirements.txt")
-	file, err := pipCreate(filePath)
-	if err != nil {
-		Logger.Error(fmt.Sprintf("Error creating requirements.txt: %s", err))
-		return false
-	}
-	for _, line := range dependenciesTxt {
-		if _, err := file.WriteString(line + "\n"); err != nil {
+		name := p.getRepo(pkg.SourceID)
+		if name == "" {
+			continue
+		}
+		dir := p.packageDir(name)
+		if err := pipMkdirAll(dir, 0755); err != nil {
+			Logger.Error(fmt.Sprintf("Error creating directory %s: %s", dir, err))
+			return false
+		}
+		filePath := filepath.Join(dir, "requirements.txt")
+		file, err := pipCreate(filePath)
+		if err != nil {
+			Logger.Error(fmt.Sprintf("Error creating requirements.txt: %s", err))
+			return false
+		}
+		line := fmt.Sprintf("%s==%s\n", name, pkg.Version)
+		if _, err := file.WriteString(line); err != nil {
+			_ = pipClose(file)
 			Logger.Error(fmt.Sprintf("Error writing to requirements.txt: %s", err))
 			return false
 		}
-	}
-	defer func() {
 		if closeErr := pipClose(file); closeErr != nil {
 			_ = fmt.Errorf("warning: failed to close requirements.txt file: %v", closeErr)
 		}
-	}()
+		found = true
+	}
 	return found
 }
 
@@ -195,13 +205,14 @@ func (p *PyPiProvider) createWrappers() error {
 		if len(registryItem.Bin) == 0 {
 			continue
 		}
+		prefixDir := p.packageDir(p.getRepo(pkg.SourceID))
 		for binName, binCmd := range registryItem.Bin {
 			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			// Remove any existing wrapper with the same name to avoid conflicts
 			if _, err := pipLstat(wrapperPath); err == nil {
 				_ = pipRemove(wrapperPath)
 			}
-			if err := p.createPythonWrapperForCommand(binCmd, wrapperPath); err != nil {
+			if err := p.createPythonWrapperForPrefix(binCmd, wrapperPath, prefixDir); err != nil {
 				Logger.Error(fmt.Sprintf("Error creating wrapper for %s: %v", binName, err))
 				continue
 			}
@@ -244,12 +255,21 @@ func (p *PyPiProvider) pythonCommand() (string, error) {
 	return "", fmt.Errorf("python3 or python command not found")
 }
 
-// createPythonWrapperForCommand creates a wrapper that prepares the environment and executes the given command.
+// createPythonWrapperForCommand creates a wrapper using the provider root prefix.
+// Production wrappers go through createPythonWrapperForPrefix with a per-package dir.
 func (p *PyPiProvider) createPythonWrapperForCommand(commandToExec string, wrapperPath string) error {
-	sitePackagesDir := p.findSitePackagesDir()
-	binDir := filepath.Join(p.APP_PACKAGES_DIR, "bin")
+	return p.createPythonWrapperForPrefix(commandToExec, wrapperPath, p.APP_PACKAGES_DIR)
+}
+
+// createPythonWrapperForPrefix creates a wrapper that prepares the environment from prefixDir.
+func (p *PyPiProvider) createPythonWrapperForPrefix(commandToExec string, wrapperPath string, prefixDir string) error {
+	if prefixDir == "" {
+		prefixDir = p.APP_PACKAGES_DIR
+	}
+	sitePackagesDir := p.findSitePackagesDirIn(prefixDir)
+	binDir := filepath.Join(prefixDir, "bin")
 	if sitePackagesDir == "" {
-		sitePackagesDir = p.APP_PACKAGES_DIR
+		sitePackagesDir = prefixDir
 	}
 	commandToExec, err := p.normalizePyPiBinCommand(commandToExec)
 	if err != nil {
@@ -274,15 +294,18 @@ exec %s "$@"
 	return nil
 }
 
-// findSitePackagesDir finds the site-packages directory where pip installed the modules.
-// It uses the current Python version to locate the correct directory, ensuring compatibility
-// with the latest Python version instead of relying on old versions.
+// findSitePackagesDir finds site-packages under the shared provider root (legacy / tests).
 func (p *PyPiProvider) findSitePackagesDir() string {
+	return p.findSitePackagesDirIn(p.APP_PACKAGES_DIR)
+}
+
+// findSitePackagesDirIn finds the site-packages directory under a pip --prefix tree.
+func (p *PyPiProvider) findSitePackagesDirIn(prefixDir string) string {
 	// First, try to detect the current Python version and use that
 	pythonVersion, err := p.getPythonVersion()
 	if err == nil {
 		// Construct the expected path using current Python version
-		expectedPath := filepath.Join(p.APP_PACKAGES_DIR, "lib", "python"+pythonVersion, "site-packages")
+		expectedPath := filepath.Join(prefixDir, "lib", "python"+pythonVersion, "site-packages")
 		if _, err := pipStat(expectedPath); err == nil {
 			return expectedPath
 		}
@@ -292,7 +315,7 @@ func (p *PyPiProvider) findSitePackagesDir() string {
 	}
 
 	// Fallback: search for any python* directory (for backward compatibility)
-	libDir := filepath.Join(p.APP_PACKAGES_DIR, "lib")
+	libDir := filepath.Join(prefixDir, "lib")
 	if _, err := pipStat(libDir); os.IsNotExist(err) {
 		return ""
 	}
@@ -374,7 +397,11 @@ func normalizeDistributionName(name string) string {
 
 // findPackageInfoDir tries to locate the <dist>-<version>.dist-info (or .egg-info) directory for a package
 func (p *PyPiProvider) findPackageInfoDir(packageName string) string {
-	sitePackagesDir := p.findSitePackagesDir()
+	return p.findPackageInfoDirIn(p.packageDir(packageName), packageName)
+}
+
+func (p *PyPiProvider) findPackageInfoDirIn(prefixDir, packageName string) string {
+	sitePackagesDir := p.findSitePackagesDirIn(prefixDir)
 	if sitePackagesDir == "" {
 		return ""
 	}
@@ -443,14 +470,15 @@ func (p *PyPiProvider) Clean() bool {
 
 func (p *PyPiProvider) Sync() bool {
 	if _, err := pipStat(p.APP_PACKAGES_DIR); os.IsNotExist(err) {
-		if err := pipMkdir(p.APP_PACKAGES_DIR, 0755); err != nil {
+		if err := pipMkdirAll(p.APP_PACKAGES_DIR, 0755); err != nil {
 			fmt.Println("Error creating directory:", err)
 			return false
 		}
 	}
 
-	packagesFound := p.generateRequirementsTxt()
-	if !packagesFound {
+	desired := lppPyGetDataForProvider("pypi").Packages
+	if len(desired) == 0 {
+		p.cleanupLegacyPyPiRoot()
 		return true
 	}
 
@@ -465,21 +493,22 @@ func (p *PyPiProvider) Sync() bool {
 		Logger.Info(fmt.Sprintf("PyPI Sync: Using Python version %s", pythonVersion))
 	}
 
-	desired := local_packages_parser.GetDataForProvider("pypi").Packages
-
-	if p.areAllPackagesInstalled(desired) {
-		Logger.Info("PyPI Sync: All packages already installed correctly, skipping installation")
-		_ = p.createWrappers()
-		return true
-	}
-
-	installed := p.getInstalledPackages()
 	allOk := true
 	installedCount := 0
 	skippedCount := 0
 
 	for _, pkg := range desired {
 		name := p.getRepo(pkg.SourceID)
+		if name == "" {
+			continue
+		}
+		dir := p.packageDir(name)
+		if err := pipMkdirAll(dir, 0755); err != nil {
+			Logger.Error(fmt.Sprintf("Error creating directory %s: %v", dir, err))
+			allOk = false
+			continue
+		}
+		installed := p.getInstalledPackagesIn(dir)
 		if p.isDistributionInstalled(installed, name, pkg.Version) {
 			Logger.Info(fmt.Sprintf("PyPI Sync: Package %s==%s already installed, skipping", name, pkg.Version))
 			skippedCount++
@@ -487,28 +516,45 @@ func (p *PyPiProvider) Sync() bool {
 		}
 		pkgString := fmt.Sprintf("%s==%s", name, pkg.Version)
 		Logger.Info(fmt.Sprintf("PyPI Sync: Installing package %s", pkgString))
-		// Use the current pip command which should be associated with the current Python version
-		installCode, err := pipShellOut(pipCmd, []string{"install", pkgString, "--prefix", p.APP_PACKAGES_DIR}, p.APP_PACKAGES_DIR, nil)
+		installCode, err := pipShellOut(pipCmd, []string{"install", pkgString, "--prefix", dir}, dir, nil)
 		if err != nil || installCode != 0 {
 			Logger.Error(fmt.Sprintf("Error installing %s==%s: %v", name, pkg.Version, err))
 			allOk = false
 		} else {
 			installedCount++
-			installed[name] = pkg.Version
 		}
 	}
 
 	_ = p.createWrappers()
+	p.cleanupLegacyPyPiRoot()
 
 	Logger.Info(fmt.Sprintf("PyPI Sync: Completed - %d packages installed, %d packages skipped", installedCount, skippedCount))
 	return allOk
 }
 
+func (p *PyPiProvider) cleanupLegacyPyPiRoot() {
+	rootReq := filepath.Join(p.APP_PACKAGES_DIR, "requirements.txt")
+	if _, err := pipStat(rootReq); err == nil {
+		if err := pipRemove(rootReq); err != nil {
+			Logger.Error(fmt.Sprintf("Warning: failed to remove leftover %s: %v", rootReq, err))
+		}
+	}
+	for _, name := range []string{"bin", "lib", "include"} {
+		path := filepath.Join(p.APP_PACKAGES_DIR, name)
+		if _, err := pipStat(path); err == nil {
+			if err := pipRemoveAll(path); err != nil {
+				Logger.Error(fmt.Sprintf("Warning: failed to remove leftover %s: %v", path, err))
+			}
+		}
+	}
+}
+
 // areAllPackagesInstalled checks if all desired packages are already installed with correct versions
 func (p *PyPiProvider) areAllPackagesInstalled(desired []local_packages_parser.LocalPackageItem) bool {
-	installed := p.getInstalledPackages()
 	for _, pkg := range desired {
-		if !p.isDistributionInstalled(installed, p.getRepo(pkg.SourceID), pkg.Version) {
+		name := p.getRepo(pkg.SourceID)
+		installed := p.getInstalledPackagesIn(p.packageDir(name))
+		if !p.isDistributionInstalled(installed, name, pkg.Version) {
 			return false
 		}
 	}
@@ -529,16 +575,24 @@ func (p *PyPiProvider) isDistributionInstalled(installed map[string]string, name
 	return false
 }
 
-// getInstalledPackages gets the list of installed packages using pip freeze scoped to this provider's site-packages
-// (--prefix installs are not visible to a plain `pip freeze`, which lists the active interpreter's environment).
+// getInstalledPackages gets packages frozen from the shared provider prefix (legacy / tests).
 func (p *PyPiProvider) getInstalledPackages() map[string]string {
+	return p.getInstalledPackagesIn(p.APP_PACKAGES_DIR)
+}
+
+func (p *PyPiProvider) getInstalledPackagesFor(packageName string) map[string]string {
+	return p.getInstalledPackagesIn(p.packageDir(packageName))
+}
+
+// getInstalledPackagesIn gets the list of installed packages using pip freeze scoped to a prefix's site-packages.
+func (p *PyPiProvider) getInstalledPackagesIn(prefixDir string) map[string]string {
 	installed := map[string]string{}
-	siteDir := p.findSitePackagesDir()
+	siteDir := p.findSitePackagesDirIn(prefixDir)
 	args := []string{"freeze"}
 	if siteDir != "" {
 		args = append(args, "--path", siteDir)
 	}
-	freezeCode, freezeOut, freezeErr := pipShellOutCapture(pipCmd, args, p.APP_PACKAGES_DIR, nil)
+	freezeCode, freezeOut, freezeErr := pipShellOutCapture(pipCmd, args, prefixDir, nil)
 	trimmed := strings.TrimSpace(freezeOut)
 	if freezeCode == 0 {
 		if trimmed == "" {
@@ -579,7 +633,8 @@ func (p *PyPiProvider) Install(sourceID, version string) bool {
 		return false
 	}
 	_ = p.Sync()
-	if !p.isDistributionInstalled(p.getInstalledPackages(), p.getRepo(sourceID), version) {
+	name := p.getRepo(sourceID)
+	if !p.isDistributionInstalled(p.getInstalledPackagesFor(name), name, version) {
 		_ = lppPyRemove(sourceID)
 		return false
 	}
@@ -597,8 +652,9 @@ func (p *PyPiProvider) removeBin(sourceID string) error {
 		return fmt.Errorf("no package info directory found for %s", packageName)
 	}
 	entryPoints := p.parseEntryPointsFromInfoDir(infoDir)
+	prefixDir := p.packageDir(packageName)
 	for _, entryPoint := range entryPoints {
-		binPath := filepath.Join(p.APP_PACKAGES_DIR, "bin", entryPoint)
+		binPath := filepath.Join(prefixDir, "bin", entryPoint)
 		if _, err := pipLstat(binPath); err == nil {
 			if err := pipRemove(binPath); err != nil {
 				return fmt.Errorf("failed to remove bin script %s: %v", binPath, err)
@@ -622,6 +678,9 @@ func (p *PyPiProvider) Remove(sourceID string) bool {
 	if err := lppPyRemove(sourceID); err != nil {
 		Logger.Error(fmt.Sprintf("Error removing package %s from local packages: %v", packageName, err))
 		return false
+	}
+	if err := pipRemoveAll(p.packageDir(packageName)); err != nil {
+		Logger.Error(fmt.Sprintf("Warning: failed to remove package directory %s: %v", p.packageDir(packageName), err))
 	}
 	Logger.Info(fmt.Sprintf("PyPI Remove: Package %s removed successfully", packageName))
 	return p.Sync()

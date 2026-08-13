@@ -30,6 +30,8 @@ var nugetRemove = os.Remove
 var nugetChmod = os.Chmod
 var nugetStat = os.Stat
 var nugetMkdirAll = os.MkdirAll
+var nugetRemoveAll = os.RemoveAll
+var nugetReadDir = os.ReadDir
 var nugetWriteFile = os.WriteFile
 
 // Injectable local packages helpers for tests
@@ -60,6 +62,38 @@ func (p *NuGetProvider) getRepo(sourceID string) string {
 	return ""
 }
 
+func (p *NuGetProvider) packageDir(packageName string) string {
+	return filepath.Join(p.APP_PACKAGES_DIR, packageName)
+}
+
+func (p *NuGetProvider) ensureProjectFile(dir string) bool {
+	projectPath := filepath.Join(dir, "nvpm-tools.csproj")
+	projectContent := `<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>`
+	if _, err := nugetStat(projectPath); os.IsNotExist(err) {
+		if err := nugetWriteFile(projectPath, []byte(projectContent), 0644); err != nil {
+			Logger.Error(fmt.Sprintf("NuGet: Error creating project file: %v", err))
+			return false
+		}
+	}
+	return true
+}
+
+func (p *NuGetProvider) preparePackageDir(dir string) error {
+	if fi, err := nugetStat(dir); err == nil && !fi.IsDir() {
+		if err := nugetRemove(dir); err != nil {
+			return err
+		}
+	}
+	return nugetMkdirAll(dir, 0755)
+}
+
 func (p *NuGetProvider) Install(sourceID, version string) bool {
 	packageName := p.getRepo(sourceID)
 	if packageName == "" {
@@ -72,39 +106,23 @@ func (p *NuGetProvider) Install(sourceID, version string) bool {
 		return false
 	}
 
-	// Ensure packages directory exists
-	if err := nugetMkdirAll(p.APP_PACKAGES_DIR, 0755); err != nil {
+	dir := p.packageDir(packageName)
+	if err := p.preparePackageDir(dir); err != nil {
 		Logger.Error(fmt.Sprintf("NuGet Install: Error creating packages directory: %v", err))
 		return false
 	}
 
-	// Create a temporary project file for tool installation
-	projectPath := filepath.Join(p.APP_PACKAGES_DIR, "nvpm-tools.csproj")
-	projectContent := `<?xml version="1.0" encoding="utf-8"?>
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-</Project>`
-
-	// Ensure project file exists
-	if _, err := nugetStat(projectPath); os.IsNotExist(err) {
-		if err := nugetWriteFile(projectPath, []byte(projectContent), 0644); err != nil {
-			Logger.Error(fmt.Sprintf("NuGet Install: Error creating project file: %v", err))
-			return false
-		}
+	if !p.ensureProjectFile(dir) {
+		return false
 	}
 
-	// Build dotnet tool install command
-	args := []string{"tool", "install", packageName, "--tool-path", p.APP_PACKAGES_DIR}
+	args := []string{"tool", "install", packageName, "--tool-path", dir}
 	if version != "" && version != "latest" {
 		args = append(args, "--version", version)
 	}
 
 	Logger.Info(fmt.Sprintf("NuGet Install: Installing %s@%s", packageName, version))
-	code, err := nugetShellOut(nugetCmd, args, p.APP_PACKAGES_DIR, nil)
+	code, err := nugetShellOut(nugetCmd, args, dir, nil)
 	if err != nil || code != 0 {
 		Logger.Error(fmt.Sprintf("NuGet Install: Error installing tool: %v", err))
 		return false
@@ -113,8 +131,7 @@ func (p *NuGetProvider) Install(sourceID, version string) bool {
 	// Get installed version
 	installedVersion := version
 	if installedVersion == "" || installedVersion == "latest" {
-		// Try to get the installed version using dotnet tool list
-		code, output, err := nugetShellOutCapture(nugetCmd, []string{"tool", "list", "--tool-path", p.APP_PACKAGES_DIR}, "", nil)
+		code, output, err := nugetShellOutCapture(nugetCmd, []string{"tool", "list", "--tool-path", dir}, "", nil)
 		if err == nil && code == 0 {
 			lines := strings.Split(output, "\n")
 			for _, line := range lines {
@@ -143,6 +160,7 @@ func (p *NuGetProvider) Install(sourceID, version string) bool {
 	if err := p.createWrappers(); err != nil {
 		Logger.Info(fmt.Sprintf("NuGet Install: Warning creating wrappers: %v", err))
 	}
+	p.cleanupLegacyNuGetRoot()
 
 	Logger.Info(fmt.Sprintf("NuGet Install: Successfully installed %s@%s", packageName, installedVersion))
 	return true
@@ -167,16 +185,18 @@ func (p *NuGetProvider) Remove(sourceID string) bool {
 		Logger.Info(fmt.Sprintf("NuGet Remove: Warning removing wrappers: %v", err))
 	}
 
-	// Uninstall tool
-	code, err := nugetShellOut(nugetCmd, []string{"tool", "uninstall", packageName, "--tool-path", p.APP_PACKAGES_DIR}, p.APP_PACKAGES_DIR, nil)
+	dir := p.packageDir(packageName)
+	code, err := nugetShellOut(nugetCmd, []string{"tool", "uninstall", packageName, "--tool-path", dir}, dir, nil)
 	if err != nil || code != 0 {
 		Logger.Info(fmt.Sprintf("NuGet Remove: Warning uninstalling tool (may not be installed): %v", err))
 	}
 
-	// Remove from local packages
 	if err := lppNugetRemove(sourceID); err != nil {
 		Logger.Error(fmt.Sprintf("NuGet Remove: Error removing package from local packages: %v", err))
 		return false
+	}
+	if err := nugetRemoveAll(dir); err != nil {
+		Logger.Info(fmt.Sprintf("NuGet Remove: Warning removing package directory: %v", err))
 	}
 
 	Logger.Info(fmt.Sprintf("NuGet Remove: Successfully removed %s", packageName))
@@ -197,16 +217,15 @@ func (p *NuGetProvider) Update(sourceID string) bool {
 
 	Logger.Info(fmt.Sprintf("NuGet Update: Updating %s", packageName))
 
-	// Update tool
-	code, err := nugetShellOut(nugetCmd, []string{"tool", "update", packageName, "--tool-path", p.APP_PACKAGES_DIR}, p.APP_PACKAGES_DIR, nil)
+	dir := p.packageDir(packageName)
+	code, err := nugetShellOut(nugetCmd, []string{"tool", "update", packageName, "--tool-path", dir}, dir, nil)
 	if err != nil || code != 0 {
 		Logger.Error(fmt.Sprintf("NuGet Update: Error updating tool: %v", err))
 		return false
 	}
 
-	// Get updated version
 	var updatedVersion string
-	code, output, err := nugetShellOutCapture(nugetCmd, []string{"tool", "list", "--tool-path", p.APP_PACKAGES_DIR}, "", nil)
+	code, output, err := nugetShellOutCapture(nugetCmd, []string{"tool", "list", "--tool-path", dir}, "", nil)
 	if err == nil && code == 0 {
 		lines := strings.Split(output, "\n")
 		for _, line := range lines {
@@ -267,10 +286,34 @@ func (p *NuGetProvider) getLatestVersion(packageName string) (string, error) {
 	return "", fmt.Errorf("version not found")
 }
 
-// findNuGetBinDir finds the NuGet tools bin directory
 func (p *NuGetProvider) findNuGetBinDir() string {
-	// Dotnet tools install to: APP_PACKAGES_DIR
 	return p.APP_PACKAGES_DIR
+}
+
+func (p *NuGetProvider) findNuGetBinDirIn(prefixDir string) string {
+	return prefixDir
+}
+
+func (p *NuGetProvider) isNuGetToolInstalled(packageName string) bool {
+	dir := p.packageDir(packageName)
+	entries, err := nugetReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(entry.Name())
+		if name == "nvpm-tools.csproj" {
+			continue
+		}
+		base := strings.TrimSuffix(name, filepath.Ext(name))
+		if base == strings.ToLower(packageName) {
+			return true
+		}
+	}
+	return false
 }
 
 // createWrappers creates wrapper scripts for NuGet tool executables
@@ -286,12 +329,13 @@ func (p *NuGetProvider) createWrappers() error {
 		if len(registryItem.Bin) == 0 {
 			continue
 		}
+		prefixDir := p.packageDir(p.getRepo(pkg.SourceID))
 		for binName, binCmd := range registryItem.Bin {
 			wrapperPath := filepath.Join(nvpmBinDir, binName)
 			if _, err := nugetLstat(wrapperPath); err == nil {
 				_ = nugetRemove(wrapperPath)
 			}
-			if err := p.createNuGetWrapperForCommand(binCmd, wrapperPath); err != nil {
+			if err := p.createNuGetWrapperForPrefix(binCmd, wrapperPath, prefixDir); err != nil {
 				Logger.Error(fmt.Sprintf("Error creating wrapper for %s: %v", binName, err))
 				continue
 			}
@@ -305,7 +349,14 @@ func (p *NuGetProvider) createWrappers() error {
 
 // createNuGetWrapperForCommand creates a wrapper that prepares the environment and executes the given command
 func (p *NuGetProvider) createNuGetWrapperForCommand(commandToExec string, wrapperPath string) error {
-	nugetBinDir := p.findNuGetBinDir()
+	return p.createNuGetWrapperForPrefix(commandToExec, wrapperPath, p.APP_PACKAGES_DIR)
+}
+
+func (p *NuGetProvider) createNuGetWrapperForPrefix(commandToExec string, wrapperPath string, prefixDir string) error {
+	if prefixDir == "" {
+		prefixDir = p.APP_PACKAGES_DIR
+	}
+	nugetBinDir := p.findNuGetBinDirIn(prefixDir)
 	if commandToExec == "" {
 		return fmt.Errorf("empty command for wrapper %s", wrapperPath)
 	}
@@ -358,41 +409,76 @@ func (p *NuGetProvider) removeWrappersForPackage(packageName string) error {
 	return nil
 }
 
+func (p *NuGetProvider) cleanupLegacyNuGetRoot() {
+	rootCsproj := filepath.Join(p.APP_PACKAGES_DIR, "nvpm-tools.csproj")
+	if _, err := nugetStat(rootCsproj); err == nil {
+		_ = nugetRemove(rootCsproj)
+	}
+	legacyStore := filepath.Join(p.APP_PACKAGES_DIR, ".store")
+	if _, err := nugetStat(legacyStore); err == nil {
+		_ = nugetRemoveAll(legacyStore)
+	}
+	entries, err := nugetReadDir(p.APP_PACKAGES_DIR)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		_ = nugetRemove(filepath.Join(p.APP_PACKAGES_DIR, entry.Name()))
+	}
+}
+
 func (p *NuGetProvider) Sync() bool {
 	Logger.Info("NuGet Sync: Syncing NuGet packages")
 	localPackages := lppNugetGetDataForProvider(p.PROVIDER_NAME).Packages
 
 	if len(localPackages) == 0 {
+		p.cleanupLegacyNuGetRoot()
 		return true
 	}
 
-	// Check for dotnet command before proceeding
 	if !nugetHasCommand("dotnet", []string{"--version"}, nil) {
 		Logger.Error("NuGet Sync: dotnet command not found. Please install .NET SDK.")
 		return false
 	}
 
-	// Reinstall all tools
+	p.cleanupLegacyNuGetRoot()
+
+	allOk := true
 	for _, pkg := range localPackages {
 		packageName := p.getRepo(pkg.SourceID)
 		if packageName == "" {
 			continue
 		}
-		args := []string{"tool", "install", packageName, "--tool-path", p.APP_PACKAGES_DIR}
+		dir := p.packageDir(packageName)
+		if err := p.preparePackageDir(dir); err != nil {
+			Logger.Error(fmt.Sprintf("NuGet Sync: Error creating directory %s: %v", dir, err))
+			allOk = false
+			continue
+		}
+		if p.isNuGetToolInstalled(packageName) {
+			continue
+		}
+		if !p.ensureProjectFile(dir) {
+			allOk = false
+			continue
+		}
+		args := []string{"tool", "install", packageName, "--tool-path", dir}
 		if pkg.Version != "" && pkg.Version != "latest" {
 			args = append(args, "--version", pkg.Version)
 		}
-		code, err := nugetShellOut(nugetCmd, args, p.APP_PACKAGES_DIR, nil)
+		code, err := nugetShellOut(nugetCmd, args, dir, nil)
 		if err != nil || code != 0 {
 			Logger.Error(fmt.Sprintf("NuGet Sync: Error installing %s: %v", packageName, err))
-			return false
+			allOk = false
 		}
 	}
 
-	// Recreate wrappers
 	if err := p.createWrappers(); err != nil {
 		Logger.Info(fmt.Sprintf("NuGet Sync: Warning creating wrappers: %v", err))
 	}
-
-	return true
+	p.cleanupLegacyNuGetRoot()
+	return allOk
 }

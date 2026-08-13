@@ -321,6 +321,15 @@ Use nvpm add / nvpm set to install or switch to a specific version.`,
 			}
 			applyPendingAlwaysTrust(internalID)
 
+			if err := providers.PreflightRegistryInstallHooksForSource(internalID); err != nil {
+				service.output.Printf("%s %v\n", IconClose(), err)
+				failedCount++
+				allSuccess = false
+				clearPendingUpdateResolution(internalID)
+				clearPendingAlwaysTrust(internalID)
+				continue
+			}
+
 			// Update the package with spinner showing package name
 			var success bool
 			action := func() {
@@ -467,6 +476,15 @@ func (us *UpdateService) UpdateAllPackages(showFilters ...[]string) bool {
 			continue
 		}
 		applyPendingAlwaysTrust(pkg.SourceID)
+
+		if err := providers.PreflightRegistryInstallHooksForSource(pkg.SourceID); err != nil {
+			us.output.Printf("%s %v\n", IconClose(), err)
+			failedCount++
+			allSuccess = false
+			clearPendingUpdateResolution(pkg.SourceID)
+			clearPendingAlwaysTrust(pkg.SourceID)
+			continue
+		}
 
 		// Update the package with spinner showing package name
 		var success bool

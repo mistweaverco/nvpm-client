@@ -160,10 +160,11 @@ func (d *RegistryItemSourceDownloadList) UnmarshalJSON(data []byte) error {
 }
 
 type RegistryItemSource struct {
-	ID       string                         `json:"id"`
-	Asset    RegistryItemSourceAssetList    `json:"asset,omitempty"`
-	Download RegistryItemSourceDownloadList `json:"download,omitempty"`
-	Bin      string                         `json:"bin,omitempty"`
+	ID            string                         `json:"id"`
+	Asset         RegistryItemSourceAssetList    `json:"asset,omitempty"`
+	Download      RegistryItemSourceDownloadList `json:"download,omitempty"`
+	Bin           string                         `json:"bin,omitempty"`
+	ExtraPackages []string                       `json:"extra_packages,omitempty"`
 }
 
 // RegistryItemTreeSitterExternalQueries points at a separate repository that only
@@ -236,6 +237,43 @@ func (r *RegistryItemRequires) IsEmpty() bool {
 	return r == nil || (len(r.All) == 0 && len(r.One) == 0)
 }
 
+// RegistryItemPostInstall is an optional shell script run in the package install
+// directory after install. YAML/JSON may be a string or { "run": "..." }.
+type RegistryItemPostInstall struct {
+	Run string `json:"run"`
+}
+
+func (p *RegistryItemPostInstall) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		p.Run = s
+		return nil
+	}
+	var obj struct {
+		Run string `json:"run"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	p.Run = obj.Run
+	return nil
+}
+
+func (p *RegistryItemPostInstall) IsEmpty() bool {
+	return p == nil || strings.TrimSpace(p.Run) == ""
+}
+
+func (item RegistryItem) PostInstallRun() string {
+	if item.PostInstall.IsEmpty() {
+		return ""
+	}
+	return strings.TrimSpace(item.PostInstall.Run)
+}
+
 // RegistryItemGitRef is a branch or tag tip recorded by the registry updater.
 type RegistryItemGitRef struct {
 	Ref            string `json:"ref"`
@@ -266,21 +304,22 @@ type RegistryItemGit struct {
 }
 
 type RegistryItem struct {
-	Name              string                  `json:"name"`
-	Version           string                  `json:"version"`
-	PrereleaseVersion string                  `json:"prerelease_version,omitempty"`
-	Description       string                  `json:"description"`
-	Homepage          string                  `json:"homepage"`
-	Licenses          []string                `json:"licenses"`
-	Languages         []string                `json:"languages"`
-	Categories        []string                `json:"categories"`
-	EditorIntegration []string                `json:"editor_integration,omitempty"`
-	Aliases           []string                `json:"aliases,omitempty"`
-	Source            RegistryItemSource      `json:"source"`
-	Bin               map[string]string       `json:"bin"`
-	TreeSitter        *RegistryItemTreeSitter `json:"treesitter,omitempty"`
-	Requires          *RegistryItemRequires   `json:"requires,omitempty"`
-	Git               *RegistryItemGit        `json:"git,omitempty"`
+	Name              string                   `json:"name"`
+	Version           string                   `json:"version"`
+	PrereleaseVersion string                   `json:"prerelease_version,omitempty"`
+	Description       string                   `json:"description"`
+	Homepage          string                   `json:"homepage"`
+	Licenses          []string                 `json:"licenses"`
+	Languages         []string                 `json:"languages"`
+	Categories        []string                 `json:"categories"`
+	EditorIntegration []string                 `json:"editor_integration,omitempty"`
+	Aliases           []string                 `json:"aliases,omitempty"`
+	Source            RegistryItemSource       `json:"source"`
+	Bin               map[string]string        `json:"bin"`
+	TreeSitter        *RegistryItemTreeSitter  `json:"treesitter,omitempty"`
+	Requires          *RegistryItemRequires    `json:"requires,omitempty"`
+	PostInstall       *RegistryItemPostInstall `json:"post_install,omitempty"`
+	Git               *RegistryItemGit         `json:"git,omitempty"`
 }
 
 type RegistryRoot []RegistryItem

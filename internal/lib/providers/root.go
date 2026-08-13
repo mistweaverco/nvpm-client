@@ -450,39 +450,40 @@ func Install(sourceId string, version string) bool {
 		return false
 	}
 	provider := detectProvider(sourceId)
+	var ok bool
 	switch provider {
 	case ProviderNPM:
-		return getNPMProvider().Install(sourceId, version)
+		ok = getNPMProvider().Install(sourceId, version)
 	case ProviderPyPi:
-		return getPyPIProvider().Install(sourceId, version)
+		ok = getPyPIProvider().Install(sourceId, version)
 	case ProviderGolang:
-		return getGolangProvider().Install(sourceId, version)
+		ok = getGolangProvider().Install(sourceId, version)
 	case ProviderCargo:
-		return getCargoProvider().Install(sourceId, version)
+		ok = getCargoProvider().Install(sourceId, version)
 	case ProviderGitHub:
-		return getGitHubProvider().Install(sourceId, version)
+		ok = getGitHubProvider().Install(sourceId, version)
 	case ProviderGitLab:
-		return getGitLabProvider().Install(sourceId, version)
+		ok = getGitLabProvider().Install(sourceId, version)
 	case ProviderCodeberg:
-		return getCodebergProvider().Install(sourceId, version)
+		ok = getCodebergProvider().Install(sourceId, version)
 	case ProviderGem:
-		return getGemProvider().Install(sourceId, version)
+		ok = getGemProvider().Install(sourceId, version)
 	case ProviderComposer:
-		return getComposerProvider().Install(sourceId, version)
+		ok = getComposerProvider().Install(sourceId, version)
 	case ProviderLuaRocks:
-		return getLuaRocksProvider().Install(sourceId, version)
+		ok = getLuaRocksProvider().Install(sourceId, version)
 	case ProviderNuGet:
-		return getNuGetProvider().Install(sourceId, version)
+		ok = getNuGetProvider().Install(sourceId, version)
 	case ProviderOpam:
-		return getOpamProvider().Install(sourceId, version)
+		ok = getOpamProvider().Install(sourceId, version)
 	case ProviderOpenVSX:
-		return getOpenVSXProvider().Install(sourceId, version)
+		ok = getOpenVSXProvider().Install(sourceId, version)
 	case ProviderGeneric:
-		return getGenericProvider().Install(sourceId, version)
+		ok = getGenericProvider().Install(sourceId, version)
 	case ProviderUnsupported:
-		// Unsupported provider
+		return false
 	}
-	return false
+	return finishProviderOp(sourceId, ok)
 }
 
 func Remove(sourceId string) bool {
@@ -549,37 +550,38 @@ func Update(sourceId string) bool {
 	}
 
 	provider := detectProvider(sourceId)
+	var ok bool
 	switch provider {
 	case ProviderNPM:
-		return getNPMProvider().Update(sourceId)
+		ok = getNPMProvider().Update(sourceId)
 	case ProviderPyPi:
-		return getPyPIProvider().Update(sourceId)
+		ok = getPyPIProvider().Update(sourceId)
 	case ProviderGolang:
-		return getGolangProvider().Update(sourceId)
+		ok = getGolangProvider().Update(sourceId)
 	case ProviderCargo:
-		return getCargoProvider().Update(sourceId)
+		ok = getCargoProvider().Update(sourceId)
 	case ProviderGitHub:
-		return getGitHubProvider().Update(sourceId)
+		ok = getGitHubProvider().Update(sourceId)
 	case ProviderGitLab:
-		return getGitLabProvider().Update(sourceId)
+		ok = getGitLabProvider().Update(sourceId)
 	case ProviderCodeberg:
-		return getCodebergProvider().Update(sourceId)
+		ok = getCodebergProvider().Update(sourceId)
 	case ProviderGem:
-		return getGemProvider().Update(sourceId)
+		ok = getGemProvider().Update(sourceId)
 	case ProviderComposer:
-		return getComposerProvider().Update(sourceId)
+		ok = getComposerProvider().Update(sourceId)
 	case ProviderLuaRocks:
-		return getLuaRocksProvider().Update(sourceId)
+		ok = getLuaRocksProvider().Update(sourceId)
 	case ProviderNuGet:
-		return getNuGetProvider().Update(sourceId)
+		ok = getNuGetProvider().Update(sourceId)
 	case ProviderOpam:
-		return getOpamProvider().Update(sourceId)
+		ok = getOpamProvider().Update(sourceId)
 	case ProviderOpenVSX:
-		return getOpenVSXProvider().Update(sourceId)
+		ok = getOpenVSXProvider().Update(sourceId)
 	case ProviderGeneric:
-		return getGenericProvider().Update(sourceId)
+		ok = getGenericProvider().Update(sourceId)
 	case ProviderUnsupported:
-		// Unsupported provider
+		return false
 	}
-	return false
+	return finishProviderOp(sourceId, ok)
 }

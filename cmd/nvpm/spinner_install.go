@@ -24,6 +24,9 @@ func runNvpmInstallWithTreeSitterSpinnerPhases(
 	if e := providers.PreflightPackageRequires(registryItem); e != nil {
 		return false, e
 	}
+	if e := providers.PreflightRegistryInstallHooks(registryItem); e != nil {
+		return false, e
+	}
 	if providers.GitHubTreeSitterUsesPhasedInteractiveInstall(sourceID, registryItem) {
 		if e := providers.GitHubTreeSitterPreflightInteractive(sourceID, resolvedVersion); e != nil {
 			return false, e
@@ -42,7 +45,13 @@ func runNvpmInstallWithTreeSitterSpinnerPhases(
 		err = spinnerutil.Run(title, func() {
 			success = providers.GitHubTreeSitterPhaseRegisterPackage(sourceID, resolvedVersion)
 		})
-		return success, err
+		if err != nil || !success {
+			return success, err
+		}
+		if e := providers.ExecuteRegistryInstallHooks(sourceID); e != nil {
+			return false, e
+		}
+		return true, nil
 	}
 
 	if e := providers.PreflightTreeSitterParserRequirements(registryItem, resolvedVersion); e != nil {

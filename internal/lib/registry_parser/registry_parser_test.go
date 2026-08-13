@@ -84,6 +84,31 @@ func TestRegistryItem(t *testing.T) {
 	})
 }
 
+func TestRegistryItemSource_ExtraPackages(t *testing.T) {
+	var item RegistryItem
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"name":"astro-language-server",
+		"source":{
+			"id":"npm:@astrojs/language-server",
+			"extra_packages":["npm:typescript@6.0.3","npm:@astrojs/ts-plugin"]
+		}
+	}`), &item))
+	assert.Equal(t, []string{"npm:typescript@6.0.3", "npm:@astrojs/ts-plugin"}, item.Source.ExtraPackages)
+}
+
+func TestRegistryItemPostInstall_UnmarshalJSON(t *testing.T) {
+	t.Run("string", func(t *testing.T) {
+		var p RegistryItemPostInstall
+		require.NoError(t, json.Unmarshal([]byte(`"npm add typescript@6.0.3"`), &p))
+		assert.Equal(t, "npm add typescript@6.0.3", p.Run)
+	})
+	t.Run("object", func(t *testing.T) {
+		var p RegistryItemPostInstall
+		require.NoError(t, json.Unmarshal([]byte(`{"run":"npm add typescript@6.0.3"}`), &p))
+		assert.Equal(t, "npm add typescript@6.0.3", p.Run)
+	})
+}
+
 func TestRegistryItemTreeSitterBuild_QueriesOnlyJSON(t *testing.T) {
 	var build RegistryItemTreeSitterBuild
 	require.NoError(t, json.Unmarshal([]byte(`{"language":"html_tags","queries_only":true}`), &build))

@@ -315,6 +315,22 @@ func TestGetBySourceId(t *testing.T) {
 		assert.Equal(t, "v1.0.0", item.Version)
 	})
 
+	t.Run("unmarshals default_version", func(t *testing.T) {
+		mockReader := &mockFileReader{}
+		parser := NewRegistryParser(mockReader)
+
+		jsonData := `[
+			{"name": "tree-sitter-regex", "version": "v0.25.0", "default_version": "v0.25.0", "source": {"id": "github:tree-sitter/tree-sitter-regex"}}
+		]`
+
+		err := parser.LoadFromBytes([]byte(jsonData))
+		require.NoError(t, err)
+
+		item := parser.GetBySourceId("github:tree-sitter/tree-sitter-regex")
+		assert.Equal(t, "v0.25.0", item.Version)
+		assert.Equal(t, "v0.25.0", item.DefaultVersion)
+	})
+
 	t.Run("returns empty item when source ID not found", func(t *testing.T) {
 		mockReader := &mockFileReader{}
 		parser := NewRegistryParser(mockReader)

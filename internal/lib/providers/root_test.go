@@ -1,11 +1,14 @@
 package providers
 
 import (
+	"errors"
 	"os"
 	"testing"
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDetectProviderUnsupported(t *testing.T) {
@@ -31,4 +34,34 @@ func TestSyncAllInvokesProviderSyncs(t *testing.T) {
 
 	// Call SyncAllFromLock; with empty desired sets, each provider's Sync should no-op/return quickly
 	_ = SyncAllFromLock()
+}
+
+func TestResolveVersionUsesRegistryVersionWhenOmitted(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	sourceID := "github:tree-sitter/tree-sitter-regex"
+	writeRegistry(t, []registry_parser.RegistryItem{{
+		Name:           "tree-sitter-regex",
+		Version:        "v0.25.0",
+		DefaultVersion: "v0.25.0",
+		Source:         registry_parser.RegistryItemSource{ID: sourceID},
+	}})
+
+	oldDiscover := discoverGitRemoteLatestFn
+	t.Cleanup(func() { discoverGitRemoteLatestFn = oldDiscover })
+	discoverGitRemoteLatestFn = func(string, string) (GitRemoteLatestResult, error) {
+		t.Fatal("registry default must skip remote latest discovery")
+		return GitRemoteLatestResult{}, errors.New("should not discover")
+	}
+
+	got, err := ResolveVersion(sourceID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "v0.25.0", got)
+
+	got, err = ResolveVersion(sourceID, "latest")
+	require.NoError(t, err)
+	assert.Equal(t, "v0.25.0", got)
+
+	got, err = ResolveVersion(sourceID, "v1.0.0")
+	require.NoError(t, err)
+	assert.Equal(t, "v1.0.0", got)
 }

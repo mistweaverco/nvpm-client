@@ -309,6 +309,7 @@ type RegistryItemGit struct {
 type RegistryItem struct {
 	Name              string                   `json:"name"`
 	Version           string                   `json:"version"`
+	DefaultVersion    string                   `json:"default_version,omitempty"`
 	PrereleaseVersion string                   `json:"prerelease_version,omitempty"`
 	Description       string                   `json:"description"`
 	Homepage          string                   `json:"homepage"`

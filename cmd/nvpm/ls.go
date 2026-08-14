@@ -470,19 +470,7 @@ func shortGitSHA(commit string) string {
 }
 
 func isPreferBranchRef(ref string) bool {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return false
-	}
-	if providers.IsGenericDefaultBranchAlias(ref) {
-		return true
-	}
-	for _, b := range providers.GetPreferBranchPolicy().Branches {
-		if strings.EqualFold(strings.TrimSpace(b), ref) {
-			return true
-		}
-	}
-	return false
+	return providers.IsPreferBranchRef(ref)
 }
 
 func commitMatchesRef(fullCommit, avail string) bool {
@@ -553,9 +541,12 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 			return ls.discoveryDisplayFromRegistryGit(sourceID, installedVersion, installedCommit, item)
 		}
 		// Prefer policy-resolved remote_latest over the registry's bare semver tag when git.refs
-		// are not yet published (e.g. main chosen over stale v1.10.2).
-		if entry, ok, err := providers.GetRemoteLatest(sourceID); err == nil && ok && strings.TrimSpace(entry.Version) != "" {
-			return ls.discoveryDisplayForRemoteLatestGit(sourceID, installedVersion, installedCommit, entry)
+		// are not yet published (e.g. main chosen over stale v1.10.2). Competing semver tags in
+		// the cache (e.g. v1.0.0 vs registry v0.25.0) must not override the registry.
+		if entry, ok, err := providers.GetRemoteLatest(sourceID); err == nil && ok {
+			if providers.PreferRemoteLatestOverRegistry(entry, stable, prerelease) {
+				return ls.discoveryDisplayForRemoteLatestGit(sourceID, installedVersion, installedCommit, entry)
+			}
 		}
 		now := time.Now()
 		minAge := cfg.Flags.MinReleaseAge
@@ -1763,7 +1754,8 @@ func (ls *ListService) checkUpdateAvailability(sourceID, currentVersion, install
 }
 
 // resolveUpdateCandidates returns registry stable/prerelease versions, falling back to
-// the cached remote_latest entry for packages not present in the registry.
+// the cached remote_latest entry for packages not present in the registry. Git-hosted
+// registry packages may still use remote_latest when it is a prefer-branch ref.
 func resolveUpdateCandidates(registry RegistryProvider, sourceID string) (stable, prerelease, remoteCommit string) {
 	item := getRegistryItem(registry, sourceID)
 	// Release-asset packages must track GitHub/GitLab/Codeberg *releases*, not git tags.
@@ -1785,20 +1777,18 @@ func resolveUpdateCandidates(registry RegistryProvider, sourceID string) (stable
 			return result.Version, "", result.Commit
 		}
 	}
+	stable, prerelease = registry.GetLatestVersions(sourceID)
 	if providers.IsGitHostedSourceID(sourceID) {
-		if entry, ok, err := providers.GetRemoteLatest(sourceID); err == nil && ok && strings.TrimSpace(entry.Version) != "" {
-			return entry.Version, "", entry.Commit
+		if entry, ok, err := providers.GetRemoteLatest(sourceID); err == nil && ok {
+			if providers.PreferRemoteLatestOverRegistry(entry, stable, prerelease) {
+				return entry.Version, "", entry.Commit
+			}
 		}
 	}
-	stable, prerelease = registry.GetLatestVersions(sourceID)
 	if strings.TrimSpace(stable) != "" || strings.TrimSpace(prerelease) != "" {
 		return stable, prerelease, ""
 	}
-	entry, ok, err := providers.GetRemoteLatest(sourceID)
-	if err != nil || !ok {
-		return "", "", ""
-	}
-	return entry.Version, "", entry.Commit
+	return "", "", ""
 }
 
 func getRegistryItem(registry RegistryProvider, sourceID string) registry_parser.RegistryItem {

@@ -53,3 +53,22 @@ func TestDecidePreferBranchReleaseAgeGap(t *testing.T) {
 	assert.True(t, d.UseBranch)
 	assert.Equal(t, "no tag", d.Reason)
 }
+
+func TestIsPreferBranchRef(t *testing.T) {
+	assert.True(t, IsPreferBranchRef("main"))
+	assert.True(t, IsPreferBranchRef("master"))
+	assert.False(t, IsPreferBranchRef("v0.25.0"))
+	assert.False(t, IsPreferBranchRef("v1.0.0"))
+	assert.False(t, IsPreferBranchRef(""))
+}
+
+func TestPreferRemoteLatestOverRegistry(t *testing.T) {
+	branch := RemoteLatestEntry{Version: "main", Commit: "aaa"}
+	staleTag := RemoteLatestEntry{Version: "v1.0.0", Commit: "bbb"}
+
+	assert.True(t, PreferRemoteLatestOverRegistry(branch, "", ""))
+	assert.True(t, PreferRemoteLatestOverRegistry(staleTag, "", ""))
+	assert.True(t, PreferRemoteLatestOverRegistry(branch, "v0.25.0", ""))
+	assert.False(t, PreferRemoteLatestOverRegistry(staleTag, "v0.25.0", ""))
+	assert.False(t, PreferRemoteLatestOverRegistry(RemoteLatestEntry{}, "v0.25.0", ""))
+}

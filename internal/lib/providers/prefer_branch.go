@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"strings"
 	"time"
 
 	"github.com/mistweaverco/nvpm-client/internal/config"
@@ -47,6 +48,38 @@ func GetPreferBranchPolicy() PreferBranchPolicy {
 	out := preferBranchPolicy
 	out.Branches = append([]string(nil), preferBranchPolicy.Branches...)
 	return out
+}
+
+// IsPreferBranchRef reports whether ref is a configured preferred branch (or a generic
+// default-branch alias such as main/master).
+func IsPreferBranchRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return false
+	}
+	if IsGenericDefaultBranchAlias(ref) {
+		return true
+	}
+	for _, b := range GetPreferBranchPolicy().Branches {
+		if strings.EqualFold(strings.TrimSpace(b), ref) {
+			return true
+		}
+	}
+	return false
+}
+
+// PreferRemoteLatestOverRegistry reports whether cached remote_latest should override
+// registry versions for update/list. Packages not in the registry always use the cache.
+// In-registry packages only use it when the cache is a prefer-branch ref (e.g. main),
+// not a competing semver tag (e.g. stale v1.0.0 vs registry v0.25.0).
+func PreferRemoteLatestOverRegistry(entry RemoteLatestEntry, registryStable, registryPrerelease string) bool {
+	if strings.TrimSpace(entry.Version) == "" {
+		return false
+	}
+	if strings.TrimSpace(registryStable) == "" && strings.TrimSpace(registryPrerelease) == "" {
+		return true
+	}
+	return IsPreferBranchRef(entry.Version)
 }
 
 // PreferBranchDecision is the pure policy outcome given tag/branch candidates and upstream dates.

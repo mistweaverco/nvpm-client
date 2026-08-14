@@ -534,3 +534,72 @@ func TestDiscoveryDisplayRegistryVersionIgnoredWhenRemoteLatestPreferBranch(t *t
 	_, hasUpdate := svc.checkUpdateAvailability("github:saghen/blink.cmp", "main", commit)
 	assert.False(t, hasUpdate)
 }
+
+func TestCheckUpdateAvailabilityIgnoresStaleRemoteLatestTag(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NVPM_HOME", home)
+	_ = files.GetAppDataPath()
+
+	providers.SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
+
+	sourceID := "github:tree-sitter/tree-sitter-regex"
+	installedCommit := "b2ac15e27fce703d2f37a79ccd94a5c0cbe9720b"
+	require.NoError(t, providers.SetRemoteLatest(sourceID, providers.RemoteLatestEntry{
+		Version: "v1.0.0",
+		Commit:  "17a3293714312c691ef14217f60593a3d093381c",
+	}))
+
+	svc := NewListServiceWithDependencies(
+		&MockLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(id string) (string, string) {
+				assert.Equal(t, sourceID, id)
+				return "v0.25.0", ""
+			},
+			GetDataFunc: func(bool) []registry_parser.RegistryItem {
+				return []registry_parser.RegistryItem{{
+					Source:  registry_parser.RegistryItemSource{ID: sourceID},
+					Version: "v0.25.0",
+				}}
+			},
+		},
+		&MockUpdateChecker{
+			CheckIfUpdateIsAvailableFunc: func(currentVersion, latestVersion string) (bool, string) {
+				assert.Equal(t, "v0.25.0", currentVersion)
+				assert.Equal(t, "v0.25.0", latestVersion)
+				return false, ""
+			},
+		},
+		&MockFileDownloader{},
+	)
+
+	_, hasUpdate := svc.checkUpdateAvailability(sourceID, "v0.25.0", installedCommit)
+	assert.False(t, hasUpdate)
+
+	upSvc := NewUpdateServiceWithDependencies(
+		&MockLocalPackagesProvider{
+			GetDataFunc: func(bool) local_packages_parser.LocalPackageRoot {
+				return local_packages_parser.LocalPackageRoot{Packages: []local_packages_parser.LocalPackageItem{{
+					SourceID: sourceID,
+					Version:  "v0.25.0",
+					Commit:   installedCommit,
+				}}}
+			},
+		},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(string) (string, string) { return "v0.25.0", "" },
+			GetDataFunc: func(bool) []registry_parser.RegistryItem {
+				return []registry_parser.RegistryItem{{
+					Source:  registry_parser.RegistryItemSource{ID: sourceID},
+					Version: "v0.25.0",
+				}}
+			},
+		},
+		&MockUpdateChecker{
+			CheckIfUpdateIsAvailableFunc: func(string, string) (bool, string) { return false, "" },
+		},
+		&MockOutputWriter{},
+	)
+	assert.False(t, upSvc.checkUpdateAvailability(sourceID, "v0.25.0", installedCommit))
+}

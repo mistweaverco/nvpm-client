@@ -110,3 +110,39 @@ func TestGitCommitStillNeedsUpdateUsesLocalRemoteLatestOnly(t *testing.T) {
 	// Registry tip never recorded for this ref → still treat as an update.
 	assert.True(t, GitCommitStillNeedsUpdate(sourceID, "v1.1.0", installed, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
 }
+
+func TestRefreshRemoteLatestAfterInstallReplacesStaleTag(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { SetDiscoveryWritesEnabled(true) })
+
+	sourceID := "github:tree-sitter/tree-sitter-regex"
+	require.NoError(t, SetRemoteLatest(sourceID, RemoteLatestEntry{
+		Version: "v1.0.0",
+		Commit:  "17a3293714312c691ef14217f60593a3d093381c",
+	}))
+	RefreshRemoteLatestAfterInstall(sourceID, "v0.25.0", "b2ac15e27fce703d2f37a79ccd94a5c0cbe9720b")
+	entry, ok, err := GetRemoteLatest(sourceID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "v0.25.0", entry.Version)
+	assert.Equal(t, "b2ac15e27fce703d2f37a79ccd94a5c0cbe9720b", entry.Commit)
+}
+
+func TestRefreshRemoteLatestAfterInstallKeepsPreferBranchCache(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { SetDiscoveryWritesEnabled(true) })
+
+	sourceID := "github:o/plugin"
+	require.NoError(t, SetRemoteLatest(sourceID, RemoteLatestEntry{
+		Version: "main",
+		Commit:  "cccccccccccccccccccccccccccccccccccccccc",
+	}))
+	RefreshRemoteLatestAfterInstall(sourceID, "v1.2.3", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	entry, ok, err := GetRemoteLatest(sourceID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "main", entry.Version)
+	assert.Equal(t, "cccccccccccccccccccccccccccccccccccccccc", entry.Commit)
+}

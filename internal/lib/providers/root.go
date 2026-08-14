@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/log"
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/semver"
@@ -486,6 +487,15 @@ func Install(sourceId string, version string) bool {
 	return finishProviderOp(sourceId, ok)
 }
 
+func alreadyInstalledAtVersion(sourceID, version string) bool {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return false
+	}
+	installed := local_packages_parser.GetBySourceId(sourceID)
+	return strings.EqualFold(strings.TrimSpace(installed.Version), version)
+}
+
 func Remove(sourceId string) bool {
 	provider := detectProvider(sourceId)
 	switch provider {
@@ -538,14 +548,17 @@ func Update(sourceId string) bool {
 		if !enforceGitTagSHAOrReject(sourceId, registryItem.Version) {
 			return false
 		}
-		if err := enforceMinReleaseAge(sourceId, registryItem.Version); err != nil {
-			if tooSoon, ok := AsMinReleaseAgeTooSoon(err); ok {
-				// Safety wait: informational skip, not a hard error.
-				SetLastSkip(tooSoon.Error())
+		// min-release-age is for newly discovered versions, not the version already in the lock.
+		if !alreadyInstalledAtVersion(sourceId, registryItem.Version) {
+			if err := enforceMinReleaseAge(sourceId, registryItem.Version); err != nil {
+				if tooSoon, ok := AsMinReleaseAgeTooSoon(err); ok {
+					// Safety wait: informational skip, not a hard error.
+					SetLastSkip(tooSoon.Error())
+					return false
+				}
+				logAndSetError(err.Error())
 				return false
 			}
-			logAndSetError(err.Error())
-			return false
 		}
 	}
 

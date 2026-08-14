@@ -323,6 +323,7 @@ func GitCommitStillNeedsUpdate(sourceID, ref, installedCommit, remoteCommit stri
 
 // RefreshRemoteLatestAfterInstall updates remote_latest when we just installed the
 // cached "latest" ref (or when no cache exists yet), so commit tips stay in sync.
+// A prefer-branch cache (main/master/…) is not replaced by a different installed tag.
 func RefreshRemoteLatestAfterInstall(sourceID, version, commit string) {
 	sourceID = strings.TrimSpace(sourceID)
 	version = strings.TrimSpace(version)
@@ -335,8 +336,11 @@ func RefreshRemoteLatestAfterInstall(sourceID, version, commit string) {
 		return
 	}
 	if ok && strings.TrimSpace(entry.Version) != "" && !strings.EqualFold(entry.Version, version) {
-		// Installed an older/pinned ref; do not clobber the cached latest label.
-		return
+		// Don't replace a prefer-branch latest with a different installed tag/pin.
+		// Stale competing tags (v1.0.0 vs registry v0.25.0) should be refreshed.
+		if IsPreferBranchRef(entry.Version) && !IsPreferBranchRef(version) {
+			return
+		}
 	}
 	_ = SetRemoteLatest(sourceID, RemoteLatestEntry{
 		Version: version,

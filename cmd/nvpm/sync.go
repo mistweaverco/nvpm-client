@@ -132,7 +132,7 @@ Press Ctrl+C to interrupt gracefully after the current package finishes.`,
 				version           string
 				ok                bool
 				integrations      []string
-				integrationReport []string
+				integrationReport []providers.IntegrationReportLine
 			}
 
 			results := make([]pkgResult, 0, len(lock.Packages))
@@ -194,9 +194,7 @@ Press Ctrl+C to interrupt gracefully after the current package finishes.`,
 				if ok {
 					successCount++
 					fmt.Printf("%s Synced %s@%s\n", IconCheck(), id, ver)
-					for _, line := range res.integrationReport {
-						fmt.Printf("  %s@%s: %s\n", id, ver, line)
-					}
+					printIntegrationReportLines(id, ver, res.integrationReport)
 				} else {
 					failureCount++
 					fmt.Printf("%s Failed to sync %s@%s\n", IconClose(), id, ver)

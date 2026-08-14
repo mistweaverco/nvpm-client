@@ -271,7 +271,7 @@ func (p *GitHubProvider) installFromGit(sourceID, repo, version string) bool {
 	if !isPlugin {
 		pins, err := buildAndMaybeIntegrateTreeSitter(repoPath, registryItem, resolvedVersion, nil)
 		if err != nil {
-			Logger.Error(fmt.Sprintf("GitHub Install: Error building tree-sitter parsers: %v", err))
+			logAndSetError(fmt.Sprintf("GitHub Install: Error building tree-sitter parsers: %v", err))
 			return false
 		}
 		if len(pins) > 0 {

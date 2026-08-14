@@ -1,8 +1,8 @@
 package providers
 
 import (
-	"bytes"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"io/fs"
@@ -20,7 +20,11 @@ import (
 	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
 	"github.com/mistweaverco/nvpm-client/internal/lib/spinnerutil"
 	"github.com/mistweaverco/nvpm-client/internal/lib/treesitterdeps"
+	"github.com/mistweaverco/nvpm-client/internal/lib/treesitterquery"
 )
+
+//go:embed validate_query.lua
+var neovimValidateQueryLua string
 
 // Injectable helpers for tests
 var (
@@ -109,56 +113,33 @@ func resolveNeovimTreeSitterQueriesDir(repoPath, fullGrammarDir string) string {
 	return ""
 }
 
-func hasTreeSitterInheritsModeline(content []byte) bool {
-	nonEmpty := 0
-	for _, line := range bytes.Split(content, []byte{'\n'}) {
-		t := bytes.TrimSpace(line)
-		if len(t) == 0 {
-			continue
-		}
-		nonEmpty++
-		if nonEmpty > 8 {
-			break
-		}
-		if !bytes.HasPrefix(t, []byte(";")) {
-			return false
-		}
-		low := bytes.ToLower(t)
-		if bytes.Contains(low, []byte("inherits:")) {
-			return true
-		}
-	}
-	return false
+type neovimTreeSitterQueryCopyOptions struct {
+	Language      string
+	Inherits      []string
+	SourceDialect treesitterquery.Dialect
+	SourceID      string
+	Version       string
+	ParserPath    string
 }
 
-func patchNeovimTreeSitterSCM(content []byte, inherits []string) []byte {
-	s := strings.ReplaceAll(string(content), "#is-not?", "#not-eq?")
-	b := []byte(s)
-	if len(inherits) == 0 {
-		return b
+func externalQuerySourceDialect(spec registry_parser.RegistryItemTreeSitterExternalQueries) treesitterquery.Dialect {
+	switch strings.ToLower(strings.TrimSpace(spec.Dialect)) {
+	case string(treesitterquery.DialectTreeSitter):
+		return treesitterquery.DialectTreeSitter
+	default:
+		return treesitterquery.DialectNeovim
 	}
-	clean := make([]string, 0, len(inherits))
-	seen := map[string]struct{}{}
-	for _, in := range inherits {
-		in = strings.TrimSpace(in)
-		if in == "" {
-			continue
-		}
-		k := strings.ToLower(in)
-		if _, dup := seen[k]; dup {
-			continue
-		}
-		seen[k] = struct{}{}
-		clean = append(clean, in)
-	}
-	if len(clean) == 0 || hasTreeSitterInheritsModeline(b) {
-		return b
-	}
-	prefix := "; inherits: " + strings.Join(clean, ", ") + "\n"
-	return append([]byte(prefix), b...)
 }
 
-func copyNeovimTreeSitterQueriesDir(src, dst string, inherits []string) error {
+func resolveParserPathForQueryValidation(sourceID, version, lang string) string {
+	p := TreeSitterArtifactPath(sourceID, version, lang)
+	if st, err := neovimStat(p); err == nil && !st.IsDir() {
+		return p
+	}
+	return ""
+}
+
+func copyTreeSitterQueriesDir(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -175,14 +156,279 @@ func copyNeovimTreeSitterQueriesDir(src, dst string, inherits []string) error {
 		if err != nil {
 			return err
 		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, b, 0o644)
+	})
+}
+
+func copyAndPatchNeovimTreeSitterQueriesDir(src, dst string, opts neovimTreeSitterQueryCopyOptions) error {
+	var applied []treesitterquery.AppliedPatch
+	var located []neovimQueryDiag
+	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
 		if strings.EqualFold(filepath.Ext(path), ".scm") {
-			b = patchNeovimTreeSitterSCM(b, inherits)
+			result, perr := treesitterquery.Patch(b, treesitterquery.PatchOptions{
+				Language:      opts.Language,
+				QueryKind:     treesitterquery.QueryKindFromFilename(path),
+				SourceDialect: opts.SourceDialect,
+				TargetDialect: treesitterquery.DialectNeovim,
+				Inherits:      opts.Inherits,
+			})
+			if perr != nil {
+				return fmt.Errorf("patch Neovim Tree-sitter query %s/%s: %w", opts.Language, rel, perr)
+			}
+			if verr := validatePatchedNeovimTreeSitterQuery(opts, rel, result); verr != nil {
+				return verr
+			}
+			b = result.Content
+			applied = append(applied, result.Applied...)
+			for _, d := range result.Diagnostics {
+				located = append(located, neovimQueryDiag{Diagnostic: d, File: rel})
+			}
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
 		return os.WriteFile(target, b, 0o644)
 	})
+	if err != nil {
+		return err
+	}
+	if opts.SourceID != "" && strings.TrimSpace(opts.ParserPath) == "" {
+		AddIntegrationReportWarning(opts.SourceID, opts.Version, fmt.Sprintf(
+			"Skipped Neovim query validation for %s (parser artifact not available)",
+			opts.Language,
+		))
+	}
+	for _, line := range summarizeNeovimQueryPatchReport(opts.Language, opts.Inherits, applied, located) {
+		if strings.Contains(line, "compatibility warnings") {
+			AddIntegrationReportWarning(opts.SourceID, opts.Version, line)
+			Logger.Warn(line)
+			continue
+		}
+		AddIntegrationReportLine(opts.SourceID, opts.Version, line)
+	}
+	return nil
+}
+
+func validatePatchedNeovimTreeSitterQuery(opts neovimTreeSitterQueryCopyOptions, rel string, result treesitterquery.PatchResult) error {
+	parserPath := strings.TrimSpace(opts.ParserPath)
+	if parserPath == "" {
+		return nil
+	}
+	if err := validateNeovimTreeSitterQuery(opts.Language, parserPath, result.Content); err != nil {
+		return formatNeovimQueryValidationError(opts.Language, rel, err, result)
+	}
+	return nil
+}
+
+func formatNeovimQueryValidationError(lang, filename string, nvimErr error, result treesitterquery.PatchResult) error {
+	nvimMsg := strings.TrimSpace(nvimErr.Error())
+	var b strings.Builder
+	if len(result.Applied) > 0 {
+		fmt.Fprintf(&b, "failed to validate patched Neovim Tree-sitter query %s/%s:\nNeovim rejected the generated query: %s\n\nApplied rules:", lang, filename, nvimMsg)
+		seen := map[string]struct{}{}
+		for _, a := range result.Applied {
+			if _, ok := seen[a.Rule]; ok {
+				continue
+			}
+			seen[a.Rule] = struct{}{}
+			fmt.Fprintf(&b, "\n- %s", a.Rule)
+		}
+	} else {
+		fmt.Fprintf(&b, "failed to validate Neovim Tree-sitter query %s/%s: Neovim rejected the query (no nvpm transformations applied): %s", lang, filename, nvimMsg)
+	}
+	if notes := formatQueryDiagnosticNotes(result.Diagnostics); notes != "" {
+		fmt.Fprintf(&b, "\n\nCompatibility notes:\n%s", notes)
+	}
+	return fmt.Errorf("%s", b.String())
+}
+
+type neovimQueryDiag struct {
+	Diagnostic treesitterquery.Diagnostic
+	File       string
+}
+
+func formatQueryDiagnosticNotes(diags []treesitterquery.Diagnostic) string {
+	located := make([]neovimQueryDiag, 0, len(diags))
+	for _, d := range diags {
+		if d.Severity != treesitterquery.SeverityWarning && d.Severity != treesitterquery.SeverityError {
+			continue
+		}
+		located = append(located, neovimQueryDiag{Diagnostic: d})
+	}
+	return formatLocatedQueryWarnings(located)
+}
+
+func formatLocatedQueryWarnings(diags []neovimQueryDiag) string {
+	type group struct {
+		msg   string
+		count int
+		first string
+	}
+	order := make([]string, 0)
+	byMsg := map[string]*group{}
+	for _, item := range diags {
+		d := item.Diagnostic
+		if d.Severity != treesitterquery.SeverityWarning && d.Severity != treesitterquery.SeverityError {
+			continue
+		}
+		msg := strings.TrimSpace(d.Message)
+		if msg == "" {
+			continue
+		}
+		g, ok := byMsg[msg]
+		if !ok {
+			loc := strings.TrimSpace(item.File)
+			if d.Line > 0 {
+				if loc == "" {
+					loc = fmt.Sprintf("line %d", d.Line)
+				} else {
+					loc = fmt.Sprintf("%s:%d", loc, d.Line)
+				}
+			}
+			g = &group{msg: msg, first: loc}
+			byMsg[msg] = g
+			order = append(order, msg)
+		}
+		g.count++
+	}
+	if len(order) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, msg := range order {
+		g := byMsg[msg]
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString("- ")
+		b.WriteString(g.msg)
+		switch {
+		case g.count > 1 && g.first != "":
+			fmt.Fprintf(&b, " (%d times; first at %s)", g.count, g.first)
+		case g.count > 1:
+			fmt.Fprintf(&b, " (%d times)", g.count)
+		case g.first != "":
+			fmt.Fprintf(&b, " (%s)", g.first)
+		}
+	}
+	return b.String()
+}
+
+func summarizeNeovimQueryPatchReport(lang string, inherits []string, applied []treesitterquery.AppliedPatch, diags []neovimQueryDiag) []string {
+	regexN := 0
+	inheritsApplied := false
+	for _, a := range applied {
+		switch a.Rule {
+		case treesitterquery.RuleInheritsModeline:
+			inheritsApplied = true
+		case treesitterquery.RuleRegexMatch, treesitterquery.RuleRegexNotMatch,
+			treesitterquery.RuleRegexAnyMatch, treesitterquery.RuleRegexAnyNotMatch:
+			regexN++
+		}
+	}
+	var details []string
+	if inheritsApplied {
+		clean := make([]string, 0, len(inherits))
+		seen := map[string]struct{}{}
+		for _, in := range inherits {
+			in = strings.TrimSpace(in)
+			if in == "" {
+				continue
+			}
+			k := strings.ToLower(in)
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+			clean = append(clean, in)
+		}
+		if len(clean) > 0 {
+			details = append(details, "added inherits modeline: "+strings.Join(clean, ", "))
+		}
+	}
+	if regexN > 0 {
+		details = append(details, fmt.Sprintf("translated %d upstream match regexes to Vim very-magic syntax", regexN))
+	}
+	var lines []string
+	if len(details) > 0 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "Patched Neovim Tree-sitter queries for %s:", lang)
+		for _, d := range details {
+			fmt.Fprintf(&b, "\n- %s", d)
+		}
+		lines = append(lines, b.String())
+	}
+	if notes := formatLocatedQueryWarnings(diags); notes != "" {
+		lines = append(lines, fmt.Sprintf("Tree-sitter query compatibility warnings for %s:\n%s", lang, notes))
+	}
+	return lines
+}
+
+func validateNeovimTreeSitterQuery(language, parserPath string, query []byte) error {
+	lang := strings.TrimSpace(language)
+	if lang == "" {
+		return nil
+	}
+	if !neovimQueryLanguageNameRe.MatchString(lang) {
+		return fmt.Errorf("invalid tree-sitter language name for Neovim query validation: %q", lang)
+	}
+	dir, err := os.MkdirTemp("", "nvpm-ts-query-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	queryPath := filepath.Join(dir, "query.scm")
+	if err := os.WriteFile(queryPath, query, 0o644); err != nil {
+		return err
+	}
+	luaPath := filepath.Join(dir, "validate.lua")
+	if err := os.WriteFile(luaPath, []byte(neovimValidateQueryLua), 0o644); err != nil {
+		return err
+	}
+	code, out, err := neovimShellOutCapture("nvim", []string{
+		"--clean",
+		"--headless",
+		"-i", "NONE",
+		"-u", "NONE",
+		"-c", "luafile " + luaPath,
+		"-c", "qa",
+	}, "", []string{
+		"NVPM_TS_LANG=" + lang,
+		"NVPM_TS_QUERY_PATH=" + queryPath,
+		"NVPM_TS_PARSER_PATH=" + parserPath,
+	})
+	if code != 0 {
+		msg := strings.TrimSpace(out)
+		if msg == "" && err != nil {
+			msg = err.Error()
+		}
+		if msg == "" {
+			msg = fmt.Sprintf("nvim exited %d", code)
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	if err != nil {
+		return fmt.Errorf("nvim query validate: %w", err)
+	}
+	return nil
 }
 
 func cacheNeovimTreeSitterQueriesAfterBuild(
@@ -246,7 +492,15 @@ func cacheNeovimTreeSitterQueriesAfterBuild(
 		if extSrc == "" {
 			return nil, fmt.Errorf("external queries repo %s has no queries/ directory usable for language %s", repoURL, lang)
 		}
-		if err := copyNeovimTreeSitterQueriesDir(extSrc, dest, build.Inherits); err != nil {
+		copyOpts := neovimTreeSitterQueryCopyOptions{
+			Language:      lang,
+			Inherits:      build.Inherits,
+			SourceDialect: externalQuerySourceDialect(spec),
+			SourceID:      sourceID,
+			Version:       version,
+			ParserPath:    resolveParserPathForQueryValidation(sourceID, version, lang),
+		}
+		if err := copyAndPatchNeovimTreeSitterQueriesDir(extSrc, dest, copyOpts); err != nil {
 			return nil, fmt.Errorf("cache external tree-sitter queries for %s: %w", lang, err)
 		}
 		pins = append(pins, local_packages_parser.TreeSitterExternalQueryPin{
@@ -260,7 +514,15 @@ func cacheNeovimTreeSitterQueriesAfterBuild(
 	}
 
 	if src := resolveNeovimTreeSitterQueriesDir(repoPath, fullGrammarDir); src != "" {
-		if err := copyNeovimTreeSitterQueriesDir(src, dest, build.Inherits); err != nil {
+		copyOpts := neovimTreeSitterQueryCopyOptions{
+			Language:      lang,
+			Inherits:      build.Inherits,
+			SourceDialect: treesitterquery.DialectTreeSitter,
+			SourceID:      sourceID,
+			Version:       version,
+			ParserPath:    resolveParserPathForQueryValidation(sourceID, version, lang),
+		}
+		if err := copyAndPatchNeovimTreeSitterQueriesDir(src, dest, copyOpts); err != nil {
 			return nil, fmt.Errorf("cache tree-sitter queries for %s: %w", lang, err)
 		}
 		return nil, nil
@@ -494,7 +756,7 @@ func installNeovimParsersAndQueriesFromCache(sourceID, version string, languages
 						if err := neovimRemoveAll(destQueries); err != nil {
 							return fmt.Errorf("remove shadowing neovim queries %s: %w", lang, err)
 						}
-						AddIntegrationReportLine(sourceID, version, fmt.Sprintf(
+						AddIntegrationReportWarning(sourceID, version, fmt.Sprintf(
 							"Skipped Neovim site/queries install for %s (Neovim runtime already ships highlights; removed stale site/queries/%s if present; set NVPM_NEOVIM_ALWAYS_INSTALL_QUERIES=1 to force grammar queries)",
 							lang, lang,
 						))
@@ -505,7 +767,7 @@ func installNeovimParsersAndQueriesFromCache(sourceID, version string, languages
 					if err := neovimRemoveAll(destQueries); err != nil {
 						return fmt.Errorf("remove stale neovim queries %s: %w", lang, err)
 					}
-					if err := copyNeovimTreeSitterQueriesDir(cacheQueries, destQueries, nil); err != nil {
+					if err := copyTreeSitterQueriesDir(cacheQueries, destQueries); err != nil {
 						return fmt.Errorf("install neovim queries %s: %w", lang, err)
 					}
 				}

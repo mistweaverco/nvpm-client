@@ -304,9 +304,7 @@ Examples:
 						persistUpdateResolutionAfterInstall(internalID)
 						persistAlwaysTrustAfterInstall(internalID)
 						fmt.Printf("%s Successfully installed %s@%s\n", IconCheck(), displayID, resolvedVersion)
-						for _, line := range providers.ConsumeIntegrationReport(internalID, resolvedVersion) {
-							fmt.Printf("  %s@%s: %s\n", internalID, resolvedVersion, line)
-						}
+						printIntegrationReportLines(internalID, resolvedVersion, providers.ConsumeIntegrationReport(internalID, resolvedVersion))
 					} else {
 						failureCount++
 						failures = append(failures, displayID)
@@ -410,9 +408,7 @@ Examples:
 				persistUpdateResolutionAfterInstall(internalID)
 				persistAlwaysTrustAfterInstall(internalID)
 				fmt.Printf("%s Successfully installed %s@%s\n", IconCheck(), displayID, resolvedVersion)
-				for _, line := range providers.ConsumeIntegrationReport(internalID, resolvedVersion) {
-					fmt.Printf("  %s@%s: %s\n", internalID, resolvedVersion, line)
-				}
+				printIntegrationReportLines(internalID, resolvedVersion, providers.ConsumeIntegrationReport(internalID, resolvedVersion))
 			} else {
 				failureCount++
 				failures = append(failures, displayID)
@@ -490,6 +486,20 @@ func printInstallFailure(displayID, resolvedVersion string) {
 		fmt.Printf("  %s\n", detail)
 	} else {
 		fmt.Printf("  (re-run with NVPM_DEBUG=debug for provider logs)\n")
+	}
+}
+
+func printIntegrationReportLines(sourceID, version string, lines []providers.IntegrationReportLine) {
+	for _, entry := range lines {
+		icon := IconCheck()
+		if entry.Warning {
+			icon = IconAlert()
+		}
+		parts := strings.Split(entry.Text, "\n")
+		fmt.Printf("  %s %s@%s: %s\n", icon, sourceID, version, parts[0])
+		for _, extra := range parts[1:] {
+			fmt.Printf("      %s\n", extra)
+		}
 	}
 }
 

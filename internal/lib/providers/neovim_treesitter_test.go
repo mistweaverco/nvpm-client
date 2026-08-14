@@ -1,12 +1,14 @@
 package providers
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/treesitterquery"
 )
 
 func TestResolveNeovimTreeSitterQueriesDir_PrefersGrammarLocal(t *testing.T) {
@@ -43,7 +45,10 @@ func TestCopyNeovimTreeSitterQueriesDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "nested", "injections.scm"), []byte("y"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyNeovimTreeSitterQueriesDir(src, dst, nil); err != nil {
+	if err := copyAndPatchNeovimTreeSitterQueriesDir(src, dst, neovimTreeSitterQueryCopyOptions{
+		Language:      "demo",
+		SourceDialect: treesitterquery.DialectTreeSitter,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(dst, "nested", "injections.scm"))
@@ -52,13 +57,17 @@ func TestCopyNeovimTreeSitterQueriesDir(t *testing.T) {
 	}
 }
 
-func TestCopyNeovimTreeSitterQueriesDir_InheritsModelineAndNotEq(t *testing.T) {
+func TestCopyNeovimTreeSitterQueriesDir_InheritsModelinePreservesIsNot(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()
-	if err := os.WriteFile(filepath.Join(src, "highlights.scm"), []byte(`(#is-not? @x "y")`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "highlights.scm"), []byte(`(#is-not? local)`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyNeovimTreeSitterQueriesDir(src, dst, []string{"javascript"}); err != nil {
+	if err := copyAndPatchNeovimTreeSitterQueriesDir(src, dst, neovimTreeSitterQueryCopyOptions{
+		Language:      "demo",
+		Inherits:      []string{"javascript"},
+		SourceDialect: treesitterquery.DialectTreeSitter,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(dst, "highlights.scm"))
@@ -69,19 +78,23 @@ func TestCopyNeovimTreeSitterQueriesDir_InheritsModelineAndNotEq(t *testing.T) {
 	if !strings.HasPrefix(got, "; inherits: javascript\n") {
 		t.Fatalf("want inherits modeline first, got %q", got)
 	}
-	if !strings.Contains(got, "#not-eq?") || strings.Contains(got, "#is-not?") {
-		t.Fatalf("replace #is-not?: %q", got)
+	if !strings.Contains(got, "#is-not?") || strings.Contains(got, "#not-eq?") {
+		t.Fatalf("must preserve #is-not?: %q", got)
 	}
 }
 
 func TestCopyNeovimTreeSitterQueriesDir_SkipsModelineWhenPresent(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()
-	orig := "; inherits: ecma\n(#is-not? @a \"b\")\n"
+	orig := "; inherits: ecma\n(#is-not? local)\n"
 	if err := os.WriteFile(filepath.Join(src, "highlights.scm"), []byte(orig), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyNeovimTreeSitterQueriesDir(src, dst, []string{"javascript"}); err != nil {
+	if err := copyAndPatchNeovimTreeSitterQueriesDir(src, dst, neovimTreeSitterQueryCopyOptions{
+		Language:      "demo",
+		Inherits:      []string{"javascript"},
+		SourceDialect: treesitterquery.DialectTreeSitter,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(dst, "highlights.scm"))
@@ -92,8 +105,8 @@ func TestCopyNeovimTreeSitterQueriesDir_SkipsModelineWhenPresent(t *testing.T) {
 	if strings.Count(got, "inherits:") != 1 {
 		t.Fatalf("should not duplicate inherits modeline: %q", got)
 	}
-	if !strings.Contains(got, "#not-eq?") {
-		t.Fatal("expected #is-not? rewritten")
+	if strings.Contains(got, "#not-eq?") || !strings.Contains(got, "#is-not?") {
+		t.Fatalf("must preserve #is-not?: %q", got)
 	}
 }
 
@@ -234,5 +247,206 @@ func TestInstallNeovimParsersAndQueriesFromCache_SkipsQueriesWhenBundled(t *test
 	b, err := os.ReadFile(filepath.Join(dataDir, "site", "parser", "markdown"+SharedLibExt()))
 	if err != nil || string(b) != "fakeparser" {
 		t.Fatalf("parser install: %v %q", err, b)
+	}
+}
+
+func TestExternalQuerySourceDialect(t *testing.T) {
+	if got := externalQuerySourceDialect(registry_parser.RegistryItemTreeSitterExternalQueries{}); got != treesitterquery.DialectNeovim {
+		t.Fatalf("empty dialect: got %q", got)
+	}
+	if got := externalQuerySourceDialect(registry_parser.RegistryItemTreeSitterExternalQueries{Dialect: "neovim"}); got != treesitterquery.DialectNeovim {
+		t.Fatalf("neovim: got %q", got)
+	}
+	if got := externalQuerySourceDialect(registry_parser.RegistryItemTreeSitterExternalQueries{Dialect: "tree-sitter"}); got != treesitterquery.DialectTreeSitter {
+		t.Fatalf("tree-sitter: got %q", got)
+	}
+}
+
+func TestCopyAndPatch_NeovimDialectSkipsRegex(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	orig := `(#match? @foo "\\vfoo\\s+bar")`
+	if err := os.WriteFile(filepath.Join(src, "highlights.scm"), []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyAndPatchNeovimTreeSitterQueriesDir(src, dst, neovimTreeSitterQueryCopyOptions{
+		Language:      "javascript",
+		SourceDialect: treesitterquery.DialectNeovim,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dst, "highlights.scm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != orig {
+		t.Fatalf("neovim dialect must skip regex rewrite: %q", b)
+	}
+}
+
+func TestCopyAndPatchThenPlainInstallCopy(t *testing.T) {
+	src := t.TempDir()
+	cache := t.TempDir()
+	site := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "highlights.scm"), []byte(`(#match? @foo "abc+")`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyAndPatchNeovimTreeSitterQueriesDir(src, cache, neovimTreeSitterQueryCopyOptions{
+		Language:      "javascript",
+		SourceDialect: treesitterquery.DialectTreeSitter,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cached, err := os.ReadFile(filepath.Join(cache, "highlights.scm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(cached), `\\vabc+`) && !strings.Contains(string(cached), `"\\vabc+"`) {
+		// cached file should contain SCM-encoded \vabc+
+		if !strings.Contains(string(cached), `\vabc+`) {
+			t.Fatalf("expected translated regex in cache: %q", cached)
+		}
+	}
+	if err := copyTreeSitterQueriesDir(cache, site); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := os.ReadFile(filepath.Join(site, "highlights.scm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(installed) != string(cached) {
+		t.Fatalf("install must copy cache verbatim:\ncache=%q\nsite=%q", cached, installed)
+	}
+}
+
+func TestCopyAndPatch_ValidationFailurePropagates(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	parser := filepath.Join(t.TempDir(), "javascript.so")
+	if err := os.WriteFile(parser, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "highlights.scm"), []byte(`(#match? @foo "abc+")`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev := neovimShellOutCapture
+	neovimShellOutCapture = func(command string, args []string, dir string, env []string) (int, string, error) {
+		return 1, "query: invalid node type", fmt.Errorf("exit 1")
+	}
+	t.Cleanup(func() { neovimShellOutCapture = prev })
+
+	err := copyAndPatchNeovimTreeSitterQueriesDir(src, dst, neovimTreeSitterQueryCopyOptions{
+		Language:      "javascript",
+		SourceDialect: treesitterquery.DialectTreeSitter,
+		ParserPath:    parser,
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "javascript/highlights.scm") {
+		t.Fatalf("error should identify query file: %v", err)
+	}
+	if !strings.Contains(err.Error(), "neovim/regex-match") {
+		t.Fatalf("error should list applied rules: %v", err)
+	}
+}
+
+func TestCopyAndPatch_PatchFailurePropagates(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "highlights.scm"), []byte(`(#match? @foo "unterminated)`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := copyAndPatchNeovimTreeSitterQueriesDir(src, dst, neovimTreeSitterQueryCopyOptions{
+		Language:      "javascript",
+		SourceDialect: treesitterquery.DialectTreeSitter,
+	})
+	if err == nil {
+		t.Fatal("expected patch error")
+	}
+	if !strings.Contains(err.Error(), "javascript/highlights.scm") {
+		t.Fatalf("error should identify query file: %v", err)
+	}
+}
+
+func TestCopyAndPatch_ReportsWarningDetails(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "highlights.scm"), []byte("((identifier) @variable\n (#is-not? local))\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = ConsumeIntegrationReport("github:demo/js", "v1")
+	if err := copyAndPatchNeovimTreeSitterQueriesDir(src, dst, neovimTreeSitterQueryCopyOptions{
+		Language:      "javascript",
+		SourceID:      "github:demo/js",
+		Version:       "v1",
+		SourceDialect: treesitterquery.DialectTreeSitter,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lines := ConsumeIntegrationReport("github:demo/js", "v1")
+	var joined string
+	var sawWarning bool
+	for _, line := range lines {
+		joined += line.Text + "\n"
+		if line.Warning && strings.Contains(line.Text, "compatibility warnings") {
+			sawWarning = true
+		}
+	}
+	if !sawWarning {
+		t.Fatalf("expected warning-flagged compatibility report, got %#v", lines)
+	}
+	if !strings.Contains(joined, "compatibility warnings for javascript") {
+		t.Fatalf("expected warning report, got %q", joined)
+	}
+	if !strings.Contains(joined, "#is-not?") {
+		t.Fatalf("expected #is-not? explanation, got %q", joined)
+	}
+	if !strings.Contains(joined, "highlights.scm") {
+		t.Fatalf("expected query filename in warning, got %q", joined)
+	}
+}
+
+func TestSummarizeNeovimQueryPatchReport_GroupsDuplicateWarnings(t *testing.T) {
+	lines := summarizeNeovimQueryPatchReport("js", nil, nil, []neovimQueryDiag{
+		{
+			File: "highlights.scm",
+			Diagnostic: treesitterquery.Diagnostic{
+				Severity: treesitterquery.SeverityWarning,
+				Message:  `cannot safely translate regex construct "(?=...)"; leaving regex unchanged`,
+				Line:     4,
+			},
+		},
+		{
+			File: "highlights.scm",
+			Diagnostic: treesitterquery.Diagnostic{
+				Severity: treesitterquery.SeverityWarning,
+				Message:  `cannot safely translate regex construct "(?=...)"; leaving regex unchanged`,
+				Line:     9,
+			},
+		},
+	})
+	if len(lines) != 1 {
+		t.Fatalf("got %d lines: %#v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "(2 times; first at highlights.scm:4)") {
+		t.Fatalf("expected grouped warning with location, got %q", lines[0])
+	}
+}
+
+func TestFormatNeovimQueryValidationError_IncludesCompatibilityNotes(t *testing.T) {
+	err := formatNeovimQueryValidationError("javascript", "highlights.scm", fmt.Errorf("invalid node type"), treesitterquery.PatchResult{
+		Diagnostics: []treesitterquery.Diagnostic{{
+			Severity: treesitterquery.SeverityWarning,
+			Message:  "upstream Tree-sitter predicate #is-not? has no known lossless Neovim translation; preserved unchanged",
+			Line:     2,
+		}},
+	})
+	got := err.Error()
+	if !strings.Contains(got, "Compatibility notes:") {
+		t.Fatalf("expected compatibility notes, got %q", got)
+	}
+	if !strings.Contains(got, "#is-not?") {
+		t.Fatalf("expected #is-not? note, got %q", got)
 	}
 }

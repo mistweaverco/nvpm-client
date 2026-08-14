@@ -1,0 +1,2 @@
+; inherits: javascript
+(identifier) @variable

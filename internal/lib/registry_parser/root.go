@@ -182,6 +182,9 @@ type RegistryItemTreeSitterExternalQueries struct {
 	// from the remote (via git ls-remote), matching queries_semver in the
 	// neovim-treesitter parser registry.
 	Semver bool `json:"semver,omitempty"`
+	// Dialect is "tree-sitter" or "neovim". Empty means the client default for
+	// external query repositories (neovim).
+	Dialect string `json:"dialect,omitempty"`
 }
 
 // TreeSitterExternalQueriesList unmarshals external_queries as either one object or an array

@@ -34,9 +34,7 @@ func registerNestedInstallOutputHooks() func() {
 			v = "unknown"
 		}
 		fmt.Printf("%s Installed inherited grammar %s@%s\n", IconCheck(), sourceID, v)
-		for _, line := range providers.ConsumeIntegrationReport(sourceID, v) {
-			fmt.Printf("  %s@%s: %s\n", sourceID, v, line)
-		}
+		printIntegrationReportLines(sourceID, v, providers.ConsumeIntegrationReport(sourceID, v))
 	}
 	return cleanup
 }

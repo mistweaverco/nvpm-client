@@ -148,7 +148,7 @@ func GitHubTreeSitterPhaseBuildParsers(sourceID, resolvedVersion string) bool {
 	}
 	langs, err := BuildTreeSitterParsersToCache(d.repoPath, d.sourceID, d.resolvedVersion, d.registryItem.TreeSitter.Build)
 	if err != nil {
-		Logger.Error(fmt.Sprintf("GitHub Install: Error building tree-sitter parsers: %v", err))
+		logAndSetError(fmt.Sprintf("GitHub Install: Error building tree-sitter parsers: %v", err))
 		clearGitHubTreeSitterDeferred()
 		return false
 	}
@@ -174,7 +174,7 @@ func GitHubTreeSitterPhaseCacheNeovimQueries(sourceID, resolvedVersion string) b
 		d.externalQueryPreflight,
 	)
 	if err != nil {
-		Logger.Error(fmt.Sprintf("GitHub Install: Error caching Neovim tree-sitter queries: %v", err))
+		logAndSetError(fmt.Sprintf("GitHub Install: Error caching Neovim tree-sitter queries: %v", err))
 		clearGitHubTreeSitterDeferred()
 		return false
 	}
@@ -194,13 +194,13 @@ func GitHubTreeSitterPhaseRegisterPackage(sourceID, resolvedVersion string) bool
 
 	queryOnly := queryOnlyNeovimLanguagesForInstall(d.registryItem.TreeSitter.Build, d.builtLangs)
 	if err := installNeovimParsersAndQueriesFromCache(d.sourceID, d.resolvedVersion, d.builtLangs, queryOnly); err != nil {
-		Logger.Error(fmt.Sprintf("GitHub Install: Error installing Neovim parsers: %v", err))
+		logAndSetError(fmt.Sprintf("GitHub Install: Error installing Neovim parsers: %v", err))
 		return false
 	}
 
 	repoURL := d.p.getRepoURL(d.repo)
 	if err := persistGitHostedPackage(sourceID, d.resolvedVersion, d.repoPath, repoURL); err != nil {
-		Logger.Error(fmt.Sprintf("GitHub Install: Error adding package to local packages: %v", err))
+		logAndSetError(fmt.Sprintf("GitHub Install: Error adding package to local packages: %v", err))
 		return false
 	}
 	if len(d.externalQueryPins) > 0 {

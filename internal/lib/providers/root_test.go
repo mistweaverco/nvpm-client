@@ -65,3 +65,57 @@ func TestResolveVersionUsesRegistryVersionWhenOmitted(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v1.0.0", got)
 }
+
+func TestResolveVersionPrefersDefaultVersionWhenOmitted(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	sourceID := "github:microsoft/vscode-js-debug"
+	writeRegistry(t, []registry_parser.RegistryItem{{
+		Name:           "js-debug-adapter",
+		Version:        "v9.9.9",
+		DefaultVersion: "v1.117.0",
+		Source:         registry_parser.RegistryItemSource{ID: sourceID},
+	}})
+
+	oldDiscover := discoverGitRemoteLatestFn
+	t.Cleanup(func() { discoverGitRemoteLatestFn = oldDiscover })
+	discoverGitRemoteLatestFn = func(string, string) (GitRemoteLatestResult, error) {
+		t.Fatal("default_version must skip remote latest discovery")
+		return GitRemoteLatestResult{}, errors.New("should not discover")
+	}
+
+	got, err := ResolveVersion(sourceID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "v1.117.0", got)
+
+	got, err = ResolveVersion(sourceID, "latest")
+	require.NoError(t, err)
+	assert.Equal(t, "v9.9.9", got)
+
+	got, err = ResolveVersion(sourceID, "v1.76.1")
+	require.NoError(t, err)
+	assert.Equal(t, "v1.76.1", got)
+}
+
+func TestResolveVersionPrefersNestedSourceDefaultVersionWhenOmitted(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	sourceID := "github:microsoft/vscode-js-debug"
+	writeRegistry(t, []registry_parser.RegistryItem{{
+		Name:    "js-debug-adapter",
+		Version: "v9.9.9",
+		Source: registry_parser.RegistryItemSource{
+			ID:             sourceID,
+			DefaultVersion: "v1.117.0",
+		},
+	}})
+
+	oldDiscover := discoverGitRemoteLatestFn
+	t.Cleanup(func() { discoverGitRemoteLatestFn = oldDiscover })
+	discoverGitRemoteLatestFn = func(string, string) (GitRemoteLatestResult, error) {
+		t.Fatal("source.default_version must skip remote latest discovery")
+		return GitRemoteLatestResult{}, errors.New("should not discover")
+	}
+
+	got, err := ResolveVersion(sourceID, "")
+	require.NoError(t, err)
+	assert.Equal(t, "v1.117.0", got)
+}

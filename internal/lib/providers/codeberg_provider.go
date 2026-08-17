@@ -137,8 +137,8 @@ func (p *CodebergProvider) installFromRelease(sourceID, repo, version string, re
 	// Resolve version
 	resolvedVersion := version
 	if resolvedVersion == "" || resolvedVersion == "latest" {
-		resolvedVersion = registryItem.Version
-		if resolvedVersion == "" {
+		resolvedVersion = registryItem.VersionForRequestedRef(resolvedVersion)
+		if resolvedVersion == "" || resolvedVersion == "latest" {
 			// Try to get latest release from Codeberg API
 			latestTag, err := p.getLatestReleaseTag(repo)
 			if err != nil {
@@ -256,12 +256,15 @@ func (p *CodebergProvider) installFromGit(sourceID, repo, version string) bool {
 	resolvedVersion := version
 	lockedCheckout := strings.TrimSpace(GetLockedCommit()) != ""
 	if !lockedCheckout && (resolvedVersion == "" || resolvedVersion == "latest") {
-		// Try to get latest tag from the cloned repo
-		var err error
-		resolvedVersion, err = ResolveGitLatestRef(sourceID)
-		if err != nil || strings.TrimSpace(resolvedVersion) == "" {
-			Logger.Info(fmt.Sprintf("Codeberg Install: Could not determine latest version, using default branch: %v", err))
-			resolvedVersion = p.getDefaultBranch(repo, repoPath)
+		if pin := resolveOmittedOrLatestFromRegistry(sourceID, resolvedVersion); pin != "" && pin != "latest" {
+			resolvedVersion = pin
+		} else {
+			var err error
+			resolvedVersion, err = ResolveGitLatestRef(sourceID)
+			if err != nil || strings.TrimSpace(resolvedVersion) == "" {
+				Logger.Info(fmt.Sprintf("Codeberg Install: Could not determine latest version, using default branch: %v", err))
+				resolvedVersion = p.getDefaultBranch(repo, repoPath)
+			}
 		}
 	}
 

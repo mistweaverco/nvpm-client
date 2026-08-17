@@ -329,6 +329,28 @@ func TestGetBySourceId(t *testing.T) {
 		item := parser.GetBySourceId("github:tree-sitter/tree-sitter-regex")
 		assert.Equal(t, "v0.25.0", item.Version)
 		assert.Equal(t, "v0.25.0", item.DefaultVersion)
+		assert.Equal(t, "v0.25.0", item.PinForOmittedVersion())
+	})
+
+	t.Run("unmarshals nested source.default_version", func(t *testing.T) {
+		mockReader := &mockFileReader{}
+		parser := NewRegistryParser(mockReader)
+
+		jsonData := `[
+			{"name": "js-debug-adapter", "version": "v9.9.9", "source": {"id": "github:microsoft/vscode-js-debug", "default_version": "v1.117.0"}}
+		]`
+
+		err := parser.LoadFromBytes([]byte(jsonData))
+		require.NoError(t, err)
+
+		item := parser.GetBySourceId("github:microsoft/vscode-js-debug")
+		assert.Equal(t, "v9.9.9", item.Version)
+		assert.Equal(t, "", item.DefaultVersion)
+		assert.Equal(t, "v1.117.0", item.Source.DefaultVersion)
+		assert.Equal(t, "v1.117.0", item.PinForOmittedVersion())
+		assert.Equal(t, "v1.117.0", item.VersionForRequestedRef(""))
+		assert.Equal(t, "v9.9.9", item.VersionForRequestedRef("latest"))
+		assert.Equal(t, "v1.76.1", item.VersionForRequestedRef("v1.76.1"))
 	})
 
 	t.Run("returns empty item when source ID not found", func(t *testing.T) {

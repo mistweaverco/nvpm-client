@@ -160,11 +160,14 @@ func (d *RegistryItemSourceDownloadList) UnmarshalJSON(data []byte) error {
 }
 
 type RegistryItemSource struct {
-	ID            string                         `json:"id"`
-	Asset         RegistryItemSourceAssetList    `json:"asset,omitempty"`
-	Download      RegistryItemSourceDownloadList `json:"download,omitempty"`
-	Bin           string                         `json:"bin,omitempty"`
-	ExtraPackages []string                       `json:"extra_packages,omitempty"`
+	ID string `json:"id"`
+	// DefaultVersion is accepted when older registry JSON nested the pin under source
+	// instead of the package root. Prefer RegistryItem.DefaultVersion.
+	DefaultVersion string                         `json:"default_version,omitempty"`
+	Asset          RegistryItemSourceAssetList    `json:"asset,omitempty"`
+	Download       RegistryItemSourceDownloadList `json:"download,omitempty"`
+	Bin            string                         `json:"bin,omitempty"`
+	ExtraPackages  []string                       `json:"extra_packages,omitempty"`
 }
 
 // RegistryItemTreeSitterExternalQueries points at a separate repository that only
@@ -324,6 +327,35 @@ type RegistryItem struct {
 	Requires          *RegistryItemRequires    `json:"requires,omitempty"`
 	PostInstall       *RegistryItemPostInstall `json:"post_install,omitempty"`
 	Git               *RegistryItemGit         `json:"git,omitempty"`
+}
+
+// PinForOmittedVersion is the curated install pin when the user did not pass @tag.
+// Top-level default_version always wins; source.default_version is accepted for
+// older registry JSON that nested the field.
+func (item RegistryItem) PinForOmittedVersion() string {
+	if v := strings.TrimSpace(item.DefaultVersion); v != "" {
+		return v
+	}
+	return strings.TrimSpace(item.Source.DefaultVersion)
+}
+
+// VersionForRequestedRef maps a user-facing version argument onto registry data.
+// An omitted version (empty) always prefers default_version. "latest" uses the
+// discovered Version field and ignores the pin. Any other explicit ref is returned as-is.
+func (item RegistryItem) VersionForRequestedRef(requested string) string {
+	requested = strings.TrimSpace(requested)
+	if requested != "" && !strings.EqualFold(requested, "latest") {
+		return requested
+	}
+	if requested == "" {
+		if pin := item.PinForOmittedVersion(); pin != "" {
+			return pin
+		}
+	}
+	if v := strings.TrimSpace(item.Version); v != "" {
+		return v
+	}
+	return requested
 }
 
 type RegistryRoot []RegistryItem

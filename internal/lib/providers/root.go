@@ -349,24 +349,19 @@ func ResolveVersion(sourceId string, version string) (string, error) {
 		return version, nil
 	}
 
-	// Prefer the registry version when present for both:
-	// - version == "" (user omitted a version)
-	// - version == "latest" (user asked for "latest")
-	//
-	// This keeps installs consistent with the curated registry, instead of always
-	// deferring to provider "latest" logic (e.g. GitHub release/tag lookups).
-	if version == "" || version == "latest" {
-		registry := registry_parser.NewDefaultRegistryParser()
-		registryItem := registry.GetBySourceId(sourceId)
-		if registryItem.Version != "" {
-			return registryItem.Version, nil
-		}
+	registry := registry_parser.NewDefaultRegistryParser()
+	registryItem := registry.GetBySourceId(sourceId)
 
-		// Non-registry git packages: prefer-branch-over-release via remote discovery.
-		if IsGitHostedSourceID(sourceId) {
-			if ref, err := ResolveGitLatestRef(sourceId); err == nil && strings.TrimSpace(ref) != "" {
-				return strings.TrimSpace(ref), nil
-			}
+	// Omitted @version: default_version always wins over discovered latest / git tips.
+	// Explicit @latest still uses the discovered registry Version field.
+	if resolved := registryItem.VersionForRequestedRef(version); resolved != "" && resolved != "latest" {
+		return resolved, nil
+	}
+
+	// No registry pin or version: git-hosted packages use prefer-branch-over-release.
+	if IsGitHostedSourceID(sourceId) {
+		if ref, err := ResolveGitLatestRef(sourceId); err == nil && strings.TrimSpace(ref) != "" {
+			return strings.TrimSpace(ref), nil
 		}
 	}
 
@@ -405,11 +400,8 @@ func ResolveVersion(sourceId string, version string) (string, error) {
 	case ProviderOpenVSX:
 		pkgManager = getOpenVSXProvider()
 	case ProviderGeneric:
-		// Generic provider gets version from registry
-		registry := registry_parser.NewDefaultRegistryParser()
-		registryItem := registry.GetBySourceId(sourceId)
-		if registryItem.Version != "" {
-			return registryItem.Version, nil
+		if resolved := registryItem.VersionForRequestedRef(version); resolved != "" {
+			return resolved, nil
 		}
 		return "latest", nil
 	case ProviderUnsupported:
@@ -427,6 +419,13 @@ func ResolveVersion(sourceId string, version string) (string, error) {
 	}
 
 	return version, nil
+}
+
+// resolveOmittedOrLatestFromRegistry maps an empty/"latest" version onto registry data.
+// An omitted version prefers default_version; "latest" uses the discovered Version field.
+func resolveOmittedOrLatestFromRegistry(sourceID, version string) string {
+	item := registry_parser.NewDefaultRegistryParser().GetBySourceId(sourceID)
+	return item.VersionForRequestedRef(version)
 }
 
 func Install(sourceId string, version string) bool {

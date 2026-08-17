@@ -165,8 +165,8 @@ func (p *GitHubProvider) installFromRelease(sourceID, repo, version string, regi
 	}
 
 	if resolvedVersion == "" || resolvedVersion == "latest" {
-		resolvedVersion = registryItem.Version
-		if resolvedVersion == "" {
+		resolvedVersion = registryItem.VersionForRequestedRef(resolvedVersion)
+		if resolvedVersion == "" || resolvedVersion == "latest" {
 			// Try to get latest release from GitHub API
 			latestTag, err := p.getLatestReleaseTag(repo)
 			if err != nil {

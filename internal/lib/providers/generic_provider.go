@@ -92,7 +92,7 @@ func (p *GenericProvider) Install(sourceID, version string) bool {
 	// Resolve version
 	resolvedVersion := version
 	if resolvedVersion == "" || resolvedVersion == "latest" {
-		resolvedVersion = registryItem.Version
+		resolvedVersion = registryItem.VersionForRequestedRef(resolvedVersion)
 		if resolvedVersion == "" {
 			resolvedVersion = "latest"
 		}

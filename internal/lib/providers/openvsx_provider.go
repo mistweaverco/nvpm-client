@@ -95,8 +95,8 @@ func (p *OpenVSXProvider) Install(sourceID, version string) bool {
 	// Resolve version
 	resolvedVersion := version
 	if resolvedVersion == "" || resolvedVersion == "latest" {
-		resolvedVersion = registryItem.Version
-		if resolvedVersion == "" {
+		resolvedVersion = registryItem.VersionForRequestedRef(resolvedVersion)
+		if resolvedVersion == "" || resolvedVersion == "latest" {
 			// Try to get latest version from OpenVSX API
 			latestVersion, err := p.getLatestVersion(repo)
 			if err != nil {

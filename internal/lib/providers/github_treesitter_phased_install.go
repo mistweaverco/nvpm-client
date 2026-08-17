@@ -259,11 +259,15 @@ func (p *GitHubProvider) gitCloneAndCheckout(sourceID, repo, version string) (re
 	resolvedVersion = version
 	lockedCheckout := strings.TrimSpace(GetLockedCommit()) != ""
 	if !lockedCheckout && (resolvedVersion == "" || resolvedVersion == "latest") {
-		var err error
-		resolvedVersion, err = ResolveGitLatestRef(sourceID)
-		if err != nil || strings.TrimSpace(resolvedVersion) == "" {
-			Logger.Info(fmt.Sprintf("GitHub Install: Could not determine latest version, using default branch: %v", err))
-			resolvedVersion = p.getDefaultBranch(repo, repoPath)
+		if pin := resolveOmittedOrLatestFromRegistry(sourceID, resolvedVersion); pin != "" && pin != "latest" {
+			resolvedVersion = pin
+		} else {
+			var err error
+			resolvedVersion, err = ResolveGitLatestRef(sourceID)
+			if err != nil || strings.TrimSpace(resolvedVersion) == "" {
+				Logger.Info(fmt.Sprintf("GitHub Install: Could not determine latest version, using default branch: %v", err))
+				resolvedVersion = p.getDefaultBranch(repo, repoPath)
+			}
 		}
 	}
 

@@ -18,8 +18,13 @@ tasks:
     cmds:
       - go vet ./...
     silent: true
-  build-debug:
+  build:
     desc: Builds the project
+    cmds:
+      - ./scripts/build.sh
+    silent: true
+  build-debug:
+    desc: Builds the debug project
     env:
       VERSION: 0.1.0
       PLATFORM: linux-debug

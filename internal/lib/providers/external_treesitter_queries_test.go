@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/stretchr/testify/require"
 )
@@ -208,6 +209,26 @@ func TestExternalQueryNeedsStillRequiringConfirm_PartialLockPerRepo(t *testing.T
 	got := externalQueryNeedsStillRequiringConfirm("github:demo/html", "v1", needs)
 	require.Len(t, got, 1)
 	require.Contains(t, got[0].URL, "html_tags")
+}
+
+func TestExternalQueryLockConsentSurvivesGrammarVersionChange(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	require.NoError(t, local_packages_parser.AddLocalPackage("github:demo/grammar", "v1.0.0"))
+	require.NoError(t, local_packages_parser.MergePackageTreeSitterExternalQueryPins("github:demo/grammar", []local_packages_parser.TreeSitterExternalQueryPin{
+		{
+			Language: "hcl",
+			RepoURL:  "https://example.com/nvim-treesitter-queries-hcl",
+			Ref:      "oldshaoldshaoldsha",
+		},
+	}))
+
+	n := externalQueryNeed{Lang: "hcl", URL: "https://example.com/nvim-treesitter-queries-hcl"}
+	require.True(t, externalQueryLockCoversNeed("github:demo/grammar", "v2.0.0", n),
+		"prior opt-in must skip re-prompting when the grammar version changes")
+	_, _, ok := externalQueryLockPinFromLocalLock("github:demo/grammar", "v2.0.0", n.Lang, n.URL)
+	require.False(t, ok, "old query SHA must not be reused for a different grammar version")
+	got := externalQueryNeedsStillRequiringConfirm("github:demo/grammar", "v2.0.0", []externalQueryNeed{n})
+	require.Empty(t, got)
 }
 
 func TestBatchConfirmExternalTreeSitterQueries_SkippedWhenNeedsEmptyAfterLockFilter(t *testing.T) {

@@ -55,11 +55,12 @@ func externalQueryRepoURLsEqual(a, b string) bool {
 	return normalizeExternalQueryRepoURL(a) == normalizeExternalQueryRepoURL(b)
 }
 
-// externalQueryLockPinFromLocalLock returns a pinned commit from nvpm-lock.json when the lock
-// row matches this grammar package version and optional external query repo URL (reproducible sync).
-func externalQueryLockPinFromLocalLock(sourceID, version, lang, wantRepoURL string) (repoURL, ref string, ok bool) {
+func lookupExternalQueryLockPin(sourceID, lang, wantRepoURL string, requireVersion string) (repoURL, ref string, ok bool) {
 	item := local_packages_parser.GetBySourceId(sourceID)
-	if item.SourceID == "" || strings.TrimSpace(item.Version) != strings.TrimSpace(version) {
+	if item.SourceID == "" {
+		return "", "", false
+	}
+	if requireVersion != "" && strings.TrimSpace(item.Version) != strings.TrimSpace(requireVersion) {
 		return "", "", false
 	}
 	if item.Extras == nil {
@@ -85,9 +86,23 @@ func externalQueryLockPinFromLocalLock(sourceID, version, lang, wantRepoURL stri
 	return "", "", false
 }
 
+// externalQueryLockPinFromLocalLock returns a pinned commit from nvpm-lock.json when the lock
+// row matches this grammar package version and optional external query repo URL (reproducible sync).
+func externalQueryLockPinFromLocalLock(sourceID, version, lang, wantRepoURL string) (repoURL, ref string, ok bool) {
+	return lookupExternalQueryLockPin(sourceID, lang, wantRepoURL, version)
+}
+
+// externalQueryLockConsentFromLocalLock is like externalQueryLockPinFromLocalLock but ignores the
+// grammar package version. A prior opt-in (lang + repo URL + ref) is enough to skip re-prompting
+// on nvpm up when the parser version changes; clone still uses the version-gated SHA lookup.
+func externalQueryLockConsentFromLocalLock(sourceID, version, lang, wantRepoURL string) (repoURL, ref string, ok bool) {
+	_ = version
+	return lookupExternalQueryLockPin(sourceID, lang, wantRepoURL, "")
+}
+
 // externalQueryLockPinForConfirmFilter is the lock lookup used when deciding whether to prompt for
 // external query clones; tests may replace it.
-var externalQueryLockPinForConfirmFilter = externalQueryLockPinFromLocalLock
+var externalQueryLockPinForConfirmFilter = externalQueryLockConsentFromLocalLock
 
 func externalQueryLockCoversNeed(sourceID, version string, n externalQueryNeed) bool {
 	lockRepo, lockRef, ok := externalQueryLockPinForConfirmFilter(sourceID, version, n.Lang, n.URL)
@@ -102,8 +117,10 @@ func externalQueryNeedKey(lang, repoURL string) string {
 }
 
 // externalQueryNeedsStillRequiringConfirm returns only those external query needs for which the
-// lockfile does not already record an acceptable pin (same grammar version, repo URL, non-empty ref).
-// Sync and reinstall can then skip re-prompting for those languages.
+// lockfile does not already record consent (same repo URL and non-empty ref). Grammar version is
+// not required: nvpm up can refresh clones at the new parser version without asking again.
+// Checkout of a pinned SHA still requires a matching grammar version (see
+// externalQueryLockPinFromLocalLock).
 func externalQueryNeedsStillRequiringConfirm(sourceID, version string, needs []externalQueryNeed) []externalQueryNeed {
 	if len(needs) == 0 {
 		return nil
@@ -233,7 +250,8 @@ type externalQueryNeed struct {
 
 // ExternalQueryPreflightChoice records phased-install preflight consent for optional external query
 // git clones. When non-nil, the cache step skips batch confirmation. AllowUnpinned applies only to
-// language/repo pairs not already covered by a matching lockfile pin (same grammar version, repo URL, ref).
+// language/repo pairs without lockfile consent (same repo URL and non-empty ref; grammar version
+// is not required). Same-version pins still supply the clone SHA.
 type ExternalQueryPreflightChoice struct {
 	AllowUnpinned bool
 }

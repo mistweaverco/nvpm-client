@@ -268,24 +268,28 @@ func (p *GitHubProvider) installFromGit(sourceID, repo, version string) bool {
 	isPlugin := IsEditorPluginPackage(sourceID)
 
 	// If this is a Tree-sitter parser package, build artifacts and run requested integrations.
+	var pins []local_packages_parser.TreeSitterExternalQueryPin
 	if !isPlugin {
-		pins, err := buildAndMaybeIntegrateTreeSitter(repoPath, registryItem, resolvedVersion, nil)
+		var err error
+		pins, err = buildAndMaybeIntegrateTreeSitter(repoPath, registryItem, resolvedVersion, nil)
 		if err != nil {
 			logAndSetError(fmt.Sprintf("GitHub Install: Error building tree-sitter parsers: %v", err))
 			return false
 		}
-		if len(pins) > 0 {
-			if err := local_packages_parser.MergePackageTreeSitterExternalQueryPins(sourceID, pins); err != nil {
-				Logger.Info(fmt.Sprintf("GitHub Install: Warning persisting external query pins: %v", err))
-			}
-		}
 	}
 
-	// Add to local packages
+	// Persist the lock row before merging tree-sitter extras. AddLocalPackageWithCommit
+	// clears per-version pins (external queries, parser/query choices) when the version
+	// changes; writing pins first would lose them on nvpm up / reinstall.
 	repoURL := p.getRepoURL(repo)
 	if err := persistGitHostedPackage(sourceID, resolvedVersion, repoPath, repoURL); err != nil {
 		Logger.Error(fmt.Sprintf("GitHub Install: Error adding package to local packages: %v", err))
 		return false
+	}
+	if len(pins) > 0 {
+		if err := local_packages_parser.MergePackageTreeSitterExternalQueryPins(sourceID, pins); err != nil {
+			Logger.Info(fmt.Sprintf("GitHub Install: Warning persisting external query pins: %v", err))
+		}
 	}
 	if isPlugin {
 		if err := local_packages_parser.MergePackageKind(sourceID, KindNeovimPlugin); err != nil {

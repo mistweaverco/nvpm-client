@@ -128,6 +128,41 @@ func (us *UpdateService) updatePackage(sourceID string) bool {
 	return providers.Update(sourceID)
 }
 
+func lockfileIntegrations(pkg local_packages_parser.LocalPackageItem) []string {
+	if pkg.Extras == nil {
+		return nil
+	}
+	return append([]string(nil), pkg.Extras.Integrations...)
+}
+
+func (us *UpdateService) targetUpdateVersion(sourceID, currentVersion string) string {
+	stable, prerelease, _ := resolveUpdateCandidates(us.registry, sourceID)
+	if v := chooseBestRemoteVersion(currentVersion, stable, prerelease); strings.TrimSpace(v) != "" {
+		return v
+	}
+	return currentVersion
+}
+
+// runLockedPackageUpdate replays lockfile editor integrations and uses the same tree-sitter
+// phased install path as nvpm add/sync (external-query consent outside the spinner).
+func (us *UpdateService) runLockedPackageUpdate(sourceID, displayID string, pkg local_packages_parser.LocalPackageItem) (success bool, err error) {
+	ints := lockfileIntegrations(pkg)
+	providers.SetRequestedIntegrations(ints)
+	defer providers.SetRequestedIntegrations(nil)
+
+	registryItem := newRegistryParser().GetBySourceId(sourceID)
+	target := us.targetUpdateVersion(sourceID, pkg.Version)
+	title := fmt.Sprintf("Updating %s...", displayID)
+	success, err = runNvpmInstallWithTreeSitterSpinnerPhases(title, sourceID, target, registryItem, func() bool {
+		return us.updatePackage(sourceID)
+	})
+	if success && err == nil {
+		_ = local_packages_parser.MergePackageIntegrations(sourceID, ints)
+		printIntegrationReportLines(sourceID, target, providers.ConsumeIntegrationReport(sourceID, target))
+	}
+	return success, err
+}
+
 var upCmd = &cobra.Command{
 	Use:     "up",
 	Aliases: []string{"update"},
@@ -159,6 +194,17 @@ Use nvpm add / nvpm set to install or switch to a specific version.`,
 			MinAge: cfg.Flags.MinReleaseAge,
 			Force:  forceFlag,
 		})
+		if err := providers.ConfigureExternalTreeSitterQueriesFromCLI(
+			cmd.Flags().Changed("external-treesitter-queries"),
+			updateExternalTreeSitterQueries,
+		); err != nil {
+			service := newUpdateService()
+			service.output.Printf("%s Invalid --external-treesitter-queries: %v\n", IconClose(), err)
+			osExit(1)
+			return
+		}
+		cleanupNestedInstallOutput := registerNestedInstallOutputHooks()
+		defer cleanupNestedInstallOutput()
 		selfFlag, _ := cmd.Flags().GetBool("self")
 		if selfFlag {
 			service := newUpdateService()
@@ -321,23 +367,12 @@ Use nvpm add / nvpm set to install or switch to a specific version.`,
 			}
 			applyPendingAlwaysTrust(internalID)
 
-			if err := providers.PreflightRegistryInstallHooksForSource(internalID); err != nil {
-				service.output.Printf("%s %v\n", IconClose(), err)
-				failedCount++
-				allSuccess = false
-				clearPendingUpdateResolution(internalID)
-				clearPendingAlwaysTrust(internalID)
-				continue
+			var pkg local_packages_parser.LocalPackageItem
+			if installed, ok := installedByID[internalID]; ok {
+				pkg = installed
 			}
-
-			// Update the package with spinner showing package name
-			var success bool
-			action := func() {
-				success = service.updatePackage(internalID)
-			}
-
-			title := fmt.Sprintf("Updating %s...", displayID)
-			if err := spinnerutil.Run(title, action); err != nil {
+			success, err := service.runLockedPackageUpdate(internalID, displayID, pkg)
+			if err != nil {
 				service.output.Printf("%s Failed to update %s: %v\n", IconClose(), displayID, err)
 				failedCount++
 				allSuccess = false
@@ -403,11 +438,14 @@ func init() {
 	upCmd.Flags().BoolP("all", "A", false, "Update all installed packages to their latest versions")
 	upCmd.Flags().Bool("self", false, "Update nvpm itself to the latest version")
 	upCmd.Flags().Bool("force", false, "bypass min-release-age safety checks")
+	upCmd.Flags().StringVar(&updateExternalTreeSitterQueries, "external-treesitter-queries", "ask", "when Neovim integration needs optional query-only git repos from the registry: ask (default), always, never (overridden by NVPM_EXTERNAL_TREESITTER_QUERIES when this flag is left at default)")
 	upCmd.Flags().BoolVar(&installAlwaysTrust, "always-trust", false, "persistently skip min-release-age for this package (stored in lock extras.always_trust)")
 	upCmd.Flags().BoolVar(&installNoAlwaysTrust, "no-always-trust", false, "clear extras.always_trust for this package")
 	upCmd.Flags().StringVar(&installUpdateResolution, "update-resolution", "", "git-only: override update-resolution when updating (e.g. always, release-age-gap:30d)")
 	registerShowFilterFlag(upCmd)
 }
+
+var updateExternalTreeSitterQueries string
 
 // newUpdateService is a factory to allow test injection
 var newUpdateService = NewUpdateService
@@ -478,23 +516,8 @@ func (us *UpdateService) UpdateAllPackages(showFilters ...[]string) bool {
 		}
 		applyPendingAlwaysTrust(pkg.SourceID)
 
-		if err := providers.PreflightRegistryInstallHooksForSource(pkg.SourceID); err != nil {
-			us.output.Printf("%s %v\n", IconClose(), err)
-			failedCount++
-			allSuccess = false
-			clearPendingUpdateResolution(pkg.SourceID)
-			clearPendingAlwaysTrust(pkg.SourceID)
-			continue
-		}
-
-		// Update the package with spinner showing package name
-		var success bool
-		action := func() {
-			success = us.updatePackage(pkg.SourceID)
-		}
-
-		title := fmt.Sprintf("Updating %s...", pkg.SourceID)
-		if err := spinnerutil.Run(title, action); err != nil {
+		success, err := us.runLockedPackageUpdate(pkg.SourceID, pkg.SourceID, pkg)
+		if err != nil {
 			us.output.Printf("%s Failed to update %s: %v\n", IconClose(), pkg.SourceID, err)
 			failedCount++
 			allSuccess = false

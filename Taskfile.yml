@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  default:
+    desc: Lists all available tasks
+    cmds:
+      - task --list
+    silent: true
+  fmt:
+    desc: Formats the code
+    cmds:
+      - go fmt ./...
+    silent: true
+  lint:
+    desc: Runs linters and vetting tools
+    cmds:
+      - go vet ./...
+    silent: true
+  build-debug:
+    desc: Builds the project
+    env:
+      VERSION: 0.1.0
+      PLATFORM: linux-debug
+    cmds:
+      - ./scripts/build.sh
+      - mv ./dist/nvpm-linux-debug $HOME/.local/bin/nvpm
+    silent: true

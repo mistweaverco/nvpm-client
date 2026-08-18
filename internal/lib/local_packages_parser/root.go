@@ -702,6 +702,9 @@ func (lpp *LocalPackagesParser) AddLocalPackageWithCommit(sourceId, version, com
 	// Check if the package is already installed (compare normalized IDs)
 	for i, pkg := range localPackageRoot.Packages {
 		if pkg.SourceID == normalizedID {
+			// Tree-sitter pins are per grammar version. Clear them when the version changes so
+			// sync does not reuse old query SHAs. Callers that re-clone (nvpm add/up) must merge
+			// new pins *after* this persist; merging first is wiped here.
 			if pkg.Version != version && localPackageRoot.Packages[i].Extras != nil {
 				localPackageRoot.Packages[i].Extras.TreeSitterExternalQueries = nil
 				localPackageRoot.Packages[i].Extras.TreeSitterParserChoices = nil

@@ -634,6 +634,75 @@ func TestLocalPackagesParserWithMock(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not in the lock file")
 	})
+
+	t.Run("version change clears tree-sitter pins; merge after persist restores them", func(t *testing.T) {
+		existingData := LocalPackageRoot{
+			Packages: []LocalPackageItem{
+				{
+					SourceID: "github:nvim-treesitter/tree-sitter-hcl",
+					Version:  "v1.0.0",
+					Commit:   "aaa",
+					Extras: &PackageExtras{
+						Integrations: []string{"neovim"},
+						TreeSitterExternalQueries: []TreeSitterExternalQueryPin{
+							{
+								Language: "hcl",
+								RepoURL:  "https://github.com/neovim-treesitter/nvim-treesitter-queries-hcl",
+								Ref:      "oldsha",
+							},
+						},
+					},
+				},
+			},
+		}
+		jsonData, _ := json.Marshal(existingData)
+		var written []byte
+		mockFileManager := &MockFileManager{
+			GetAppLocalPackagesFilePathFunc: func() string { return "/mock/path/local-packages.json" },
+			FileExistsFunc:                  func(path string) bool { return true },
+			ReadFileFunc: func(path string) ([]byte, error) {
+				if written != nil {
+					return written, nil
+				}
+				return jsonData, nil
+			},
+			WriteFileFunc: func(path string, data []byte, perm uint32) error { written = data; return nil },
+		}
+		parser := NewWithFileManager(mockFileManager)
+
+		err := parser.AddLocalPackageWithCommit("github:nvim-treesitter/tree-sitter-hcl", "v1.1.0", "bbb")
+		assert.NoError(t, err)
+
+		var saved LocalPackageRoot
+		_ = json.Unmarshal(written, &saved)
+		assert.Len(t, saved.Packages, 1)
+		assert.Equal(t, "v1.1.0", saved.Packages[0].Version)
+		assert.Equal(t, "bbb", saved.Packages[0].Commit)
+		if assert.NotNil(t, saved.Packages[0].Extras) {
+			assert.Equal(t, []string{"neovim"}, saved.Packages[0].Extras.Integrations)
+			assert.Empty(t, saved.Packages[0].Extras.TreeSitterExternalQueries)
+		}
+
+		err = parser.MergePackageTreeSitterExternalQueryPins("github:nvim-treesitter/tree-sitter-hcl", []TreeSitterExternalQueryPin{
+			{
+				Language: "hcl",
+				RepoURL:  "https://github.com/neovim-treesitter/nvim-treesitter-queries-hcl",
+				Ref:      "newsha",
+			},
+		})
+		assert.NoError(t, err)
+		saved = LocalPackageRoot{}
+		_ = json.Unmarshal(written, &saved)
+		if assert.NotNil(t, saved.Packages[0].Extras) {
+			assert.Equal(t, []TreeSitterExternalQueryPin{
+				{
+					Language: "hcl",
+					RepoURL:  "https://github.com/neovim-treesitter/nvim-treesitter-queries-hcl",
+					Ref:      "newsha",
+				},
+			}, saved.Packages[0].Extras.TreeSitterExternalQueries)
+		}
+	})
 }
 
 func TestMockFileManager(t *testing.T) {

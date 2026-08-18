@@ -836,3 +836,14 @@ func setupUpExtraPackagesFixture(t *testing.T, installedVersion string) string {
 	t.Cleanup(restore)
 	return sourceID
 }
+
+func TestLockfileIntegrationsCopiesExtras(t *testing.T) {
+	assert.Nil(t, lockfileIntegrations(local_packages_parser.LocalPackageItem{}))
+	pkg := local_packages_parser.LocalPackageItem{
+		Extras: &local_packages_parser.PackageExtras{Integrations: []string{"neovim"}},
+	}
+	got := lockfileIntegrations(pkg)
+	assert.Equal(t, []string{"neovim"}, got)
+	got[0] = "mutated"
+	assert.Equal(t, "neovim", pkg.Extras.Integrations[0])
+}

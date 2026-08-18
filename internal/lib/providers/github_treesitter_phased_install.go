@@ -122,7 +122,8 @@ func GitHubTreeSitterPreflightInteractive(sourceID, resolvedVersion string) erro
 		}
 		pre = &ExternalQueryPreflightChoice{AllowUnpinned: allow}
 	} else if len(needs) > 0 {
-		// All external-query languages are already pinned in the lockfile at this version.
+		// Lockfile already records consent for these language/repo pairs (including pins from a
+		// previous grammar version). Clone may still refresh the SHA when the version changed.
 		pre = &ExternalQueryPreflightChoice{AllowUnpinned: false}
 	}
 

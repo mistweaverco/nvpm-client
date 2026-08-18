@@ -11,7 +11,7 @@ build_wrapper() {
 
 build_linux_debug() {
   echo "Building for linux debug version $VERSION"
-  GOOS=linux go build -gcflags "all=-N -l" -ldflags "-X 'github.com/mistweaverco/nvpm-client/lib/internal/version.VERSION=${VERSION}'" -o dist/nvpm-linux-debug
+  GOOS=linux CGO_ENABLED=0 go build -gcflags "all=-N -l" -ldflags "-X 'github.com/mistweaverco/nvpm-client/lib/internal/version.VERSION=${VERSION}'" -o dist/nvpm-linux-debug
 }
 
 build_linux_arm64() {

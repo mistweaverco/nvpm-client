@@ -224,7 +224,13 @@ type RegistryItemTreeSitterBuild struct {
 	Requires []string `json:"requires,omitempty"`
 	Inherits []string `json:"inherits,omitempty"`
 	// Injections lists host language names used at runtime/editor for injected regions (metadata).
-	Injections      []string                      `json:"injections,omitempty"`
+	Injections []string `json:"injections,omitempty"`
+	// QueriesDir is a parent directory whose {language}/ subdirectory contains Neovim .scm files
+	// (nvim-treesitter queries_dir). Empty means discover queries from the checkout.
+	QueriesDir string `json:"queries_dir,omitempty"`
+	// QueriesPath is a directory that directly contains Neovim .scm files
+	// (nvim-treesitter queries_path). Empty means discover queries from the checkout.
+	QueriesPath     string                        `json:"queries_path,omitempty"`
 	QueriesOnly     bool                          `json:"queries_only,omitempty"`
 	ExternalQueries TreeSitterExternalQueriesList `json:"external_queries,omitempty"`
 }

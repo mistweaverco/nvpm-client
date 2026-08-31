@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -92,23 +93,222 @@ func externalQueryCloneWorkDir(sourceID, version, lang, repoURL string) string {
 	return filepath.Join(TreeSitterArtifactVersionDir(sourceID, version), "external-query-clones", lang, hex.EncodeToString(sum[:8]))
 }
 
-// resolveNeovimTreeSitterQueriesDir finds highlights/injections (etc.) for Neovim under a grammar checkout.
-// Prefers grammar-local queries, then repo-root queries (for grammars in subdirectories).
-func resolveNeovimTreeSitterQueriesDir(repoPath, fullGrammarDir string) string {
-	candidates := []string{
-		filepath.Join(fullGrammarDir, "queries"),
-		filepath.Join(repoPath, "queries"),
+// neovimQueryResolveOpts controls how Neovim query files are located in a grammar checkout.
+type neovimQueryResolveOpts struct {
+	Language    string
+	QueriesDir  string
+	QueriesPath string
+}
+
+// resolveNeovimTreeSitterQueriesDir finds a directory that directly contains Neovim .scm files
+// (highlights, injections, locals, folds, …) under a grammar checkout.
+//
+// Resolution order, each step relative to the grammar directory then the repo root:
+//  1. Registry queries_path
+//  2. Registry queries_dir (unwrap {language}/ when that subdir has .scm files)
+//  3. parser.json queries_path / queries_dir (test_dir is ignored)
+//  4. Neovim-specific locations: nvim-queries/{lang}, nvim-queries, queries/nvim/{lang}, queries/nvim
+//  5. Fallback: queries/{lang}, queries
+func resolveNeovimTreeSitterQueriesDir(repoPath, fullGrammarDir string, opts neovimQueryResolveOpts) string {
+	lang := strings.TrimSpace(opts.Language)
+	bases := uniqueQuerySearchBases(fullGrammarDir, repoPath)
+
+	if src := resolveQueryPathCandidate(bases, opts.QueriesPath, lang, nil); src != "" {
+		return src
 	}
+	if src := resolveQueryDirCandidate(bases, opts.QueriesDir, lang, nil); src != "" {
+		return src
+	}
+	for _, base := range bases {
+		if src := resolveQueriesFromParserJSON(base, lang); src != "" {
+			return src
+		}
+	}
+
+	nvimRel := []string{
+		filepath.Join("nvim-queries", lang),
+		"nvim-queries",
+		filepath.Join("queries", "nvim", lang),
+		filepath.Join("queries", "nvim"),
+	}
+	if src := firstQuerySourceRel(bases, nvimRel, lang); src != "" {
+		return src
+	}
+	fallbackRel := []string{
+		filepath.Join("queries", lang),
+		"queries",
+	}
+	return firstQuerySourceRel(bases, fallbackRel, lang)
+}
+
+func uniqueQuerySearchBases(paths ...string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		key := filepath.Clean(p)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		st, err := os.Stat(p)
+		if err != nil || !st.IsDir() {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+type treeSitterParserJSON struct {
+	QueriesDir  string `json:"queries_dir"`
+	QueriesPath string `json:"queries_path"`
+	TestDir     string `json:"test_dir"`
+}
+
+func resolveQueriesFromParserJSON(base, lang string) string {
+	data, err := os.ReadFile(filepath.Join(base, "parser.json"))
+	if err != nil {
+		return ""
+	}
+	var meta treeSitterParserJSON
+	if json.Unmarshal(data, &meta) != nil {
+		return ""
+	}
+	var skip []string
+	if td := strings.TrimSpace(meta.TestDir); td != "" {
+		skip = append(skip, filepath.Join(base, filepath.FromSlash(td)))
+	}
+	if src := resolveQueryPathCandidate([]string{base}, meta.QueriesPath, lang, skip); src != "" {
+		return src
+	}
+	return resolveQueryDirCandidate([]string{base}, meta.QueriesDir, lang, skip)
+}
+
+func resolveQueryPathCandidate(bases []string, rel, lang string, skip []string) string {
+	return firstExistingQuerySource(joinRelCandidates(bases, rel), lang, skip)
+}
+
+func resolveQueryDirCandidate(bases []string, rel, lang string, skip []string) string {
+	return firstExistingQuerySource(joinRelCandidates(bases, rel), lang, skip)
+}
+
+func joinRelCandidates(bases []string, rel string) []string {
+	rel = strings.TrimSpace(rel)
+	if rel == "" {
+		return nil
+	}
+	rel = filepath.FromSlash(rel)
+	if filepath.IsAbs(rel) {
+		return []string{rel}
+	}
+	out := make([]string, 0, len(bases))
+	for _, base := range bases {
+		out = append(out, filepath.Join(base, rel))
+	}
+	return out
+}
+
+func firstQuerySourceRel(bases []string, rels []string, lang string) string {
+	var cands []string
+	for _, rel := range rels {
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			continue
+		}
+		cands = append(cands, joinRelCandidates(bases, rel)...)
+	}
+	return firstExistingQuerySource(cands, lang, nil)
+}
+
+func firstExistingQuerySource(candidates []string, lang string, skip []string) string {
 	seen := map[string]struct{}{}
 	for _, c := range candidates {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
 		key := filepath.Clean(c)
 		if _, dup := seen[key]; dup {
 			continue
 		}
 		seen[key] = struct{}{}
-		if st, err := os.Stat(c); err == nil && st.IsDir() {
-			return c
+		if src := unwrapQuerySource(c, lang, skip); src != "" {
+			return src
 		}
+	}
+	return ""
+}
+
+func skipQueryPathSet(skip []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, s := range skip {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		out[filepath.Clean(s)] = struct{}{}
+	}
+	return out
+}
+
+func isSkippedQueryPath(path string, skip map[string]struct{}) bool {
+	if len(skip) == 0 {
+		return false
+	}
+	_, ok := skip[filepath.Clean(path)]
+	return ok
+}
+
+func isQueryTestsDir(path string) bool {
+	return strings.EqualFold(filepath.Base(filepath.Clean(path)), "tests")
+}
+
+func dirHasSCMFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if strings.EqualFold(filepath.Ext(e.Name()), ".scm") {
+			return true
+		}
+	}
+	return false
+}
+
+// unwrapQuerySource returns the directory that directly contains .scm files.
+// If dir/{lang}/ has .scm files, that subdirectory is used so copies do not nest
+// as site/queries/{lang}/{lang}/highlights.scm. tests/ and parser.json test_dir are skipped.
+func unwrapQuerySource(dir, lang string, skip []string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	dir = filepath.Clean(dir)
+	skipSet := skipQueryPathSet(skip)
+	if isQueryTestsDir(dir) || isSkippedQueryPath(dir, skipSet) {
+		return ""
+	}
+	st, err := os.Stat(dir)
+	if err != nil || !st.IsDir() {
+		return ""
+	}
+	lang = strings.TrimSpace(lang)
+	if lang != "" {
+		sub := filepath.Join(dir, lang)
+		if !isQueryTestsDir(sub) && !isSkippedQueryPath(sub, skipSet) && dirHasSCMFiles(sub) {
+			return sub
+		}
+	}
+	if dirHasSCMFiles(dir) {
+		return dir
 	}
 	return ""
 }
@@ -131,6 +331,25 @@ func externalQuerySourceDialect(spec registry_parser.RegistryItemTreeSitterExter
 	}
 }
 
+// neovimQuerySourceDialect infers the source dialect of grammar-local queries.
+// Registry queries_dir / queries_path, nvim-queries/, and queries/nvim/ are Neovim dialect;
+// a generic queries/ tree is treated as tree-sitter dialect.
+func neovimQuerySourceDialect(src string, opts neovimQueryResolveOpts) treesitterquery.Dialect {
+	if strings.TrimSpace(opts.QueriesDir) != "" || strings.TrimSpace(opts.QueriesPath) != "" {
+		return treesitterquery.DialectNeovim
+	}
+	slash := filepath.ToSlash(filepath.Clean(src))
+	for _, part := range strings.Split(slash, "/") {
+		if strings.EqualFold(part, "nvim-queries") {
+			return treesitterquery.DialectNeovim
+		}
+	}
+	if strings.Contains(slash, "/queries/nvim/") || strings.HasSuffix(slash, "/queries/nvim") {
+		return treesitterquery.DialectNeovim
+	}
+	return treesitterquery.DialectTreeSitter
+}
+
 func resolveParserPathForQueryValidation(sourceID, version, lang string) string {
 	p := TreeSitterArtifactPath(sourceID, version, lang)
 	if st, err := neovimStat(p); err == nil && !st.IsDir() {
@@ -150,6 +369,9 @@ func copyTreeSitterQueriesDir(src, dst string) error {
 		}
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {
+			if rel != "." && isQueryTestsDir(path) {
+				return fs.SkipDir
+			}
 			return os.MkdirAll(target, 0o755)
 		}
 		b, err := os.ReadFile(path)
@@ -176,6 +398,9 @@ func copyAndPatchNeovimTreeSitterQueriesDir(src, dst string, opts neovimTreeSitt
 		}
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {
+			if rel != "." && isQueryTestsDir(path) {
+				return fs.SkipDir
+			}
 			return os.MkdirAll(target, 0o755)
 		}
 		b, err := os.ReadFile(path)
@@ -488,7 +713,7 @@ func cacheNeovimTreeSitterQueriesAfterBuild(
 		if cloneErr != nil {
 			return nil, fmt.Errorf("external queries for %s: %w", lang, cloneErr)
 		}
-		extSrc := resolveNeovimTreeSitterQueriesDir(cloneDir, cloneDir)
+		extSrc := resolveNeovimTreeSitterQueriesDir(cloneDir, cloneDir, neovimQueryResolveOpts{Language: lang})
 		if extSrc == "" {
 			return nil, fmt.Errorf("external queries repo %s has no queries/ directory usable for language %s", repoURL, lang)
 		}
@@ -513,11 +738,12 @@ func cacheNeovimTreeSitterQueriesAfterBuild(
 		return pins, nil
 	}
 
-	if src := resolveNeovimTreeSitterQueriesDir(repoPath, fullGrammarDir); src != "" {
+	queryOpts := neovimQueryResolveOpts{Language: lang, QueriesDir: build.QueriesDir, QueriesPath: build.QueriesPath}
+	if src := resolveNeovimTreeSitterQueriesDir(repoPath, fullGrammarDir, queryOpts); src != "" {
 		copyOpts := neovimTreeSitterQueryCopyOptions{
 			Language:      lang,
 			Inherits:      build.Inherits,
-			SourceDialect: treesitterquery.DialectTreeSitter,
+			SourceDialect: neovimQuerySourceDialect(src, queryOpts),
 			SourceID:      sourceID,
 			Version:       version,
 			ParserPath:    resolveParserPathForQueryValidation(sourceID, version, lang),
@@ -594,16 +820,13 @@ func cacheNeovimTreeSitterQueriesForBuiltLangs(
 	}
 	for _, b := range build {
 		lang := strings.TrimSpace(b.Language)
-		grammarDir := strings.TrimSpace(b.GrammarDir)
 		if lang == "" {
-			continue
-		}
-		if !b.QueriesOnly && grammarDir == "" {
 			continue
 		}
 		if _, ok := want[lang]; !ok {
 			continue
 		}
+		grammarDir := treeSitterGrammarDir(b)
 		fullGrammarDir := repoPath
 		if grammarDir != "" {
 			fullGrammarDir = filepath.Join(repoPath, filepath.FromSlash(grammarDir))
@@ -719,6 +942,7 @@ func installNeovimParsersAndQueriesFromCache(sourceID, version string, languages
 	}
 
 	queriesRoot := filepath.Join(dataDir, "site", "queries")
+	installedAny := false
 
 	for _, lang := range languages {
 		lang = strings.TrimSpace(lang)
@@ -736,6 +960,7 @@ func installNeovimParsersAndQueriesFromCache(sourceID, version string, languages
 			if err := neovimWriteFile(destPath, b, 0o755); err != nil {
 				return fmt.Errorf("write neovim parser %s: %w", lang, err)
 			}
+			installedAny = true
 		}
 
 		cacheQueries := neovimTreeSitterQueriesCacheDir(sourceID, version, lang)
@@ -770,12 +995,20 @@ func installNeovimParsersAndQueriesFromCache(sourceID, version string, languages
 					if err := copyTreeSitterQueriesDir(cacheQueries, destQueries); err != nil {
 						return fmt.Errorf("install neovim queries %s: %w", lang, err)
 					}
+					installedAny = true
 				}
 			}
 		}
 	}
 
-	AddIntegrationReportLine(sourceID, version, fmt.Sprintf("Integrated into Neovim: parsers %s, queries %s", destDir, queriesRoot))
+	if installedAny {
+		AddIntegrationReportLine(sourceID, version, fmt.Sprintf("Integrated into Neovim: parsers %s, queries %s", destDir, queriesRoot))
+	} else {
+		AddIntegrationReportWarning(sourceID, version, fmt.Sprintf(
+			"No Neovim parser or query files were installed under %s or %s",
+			destDir, queriesRoot,
+		))
+	}
 	return nil
 }
 

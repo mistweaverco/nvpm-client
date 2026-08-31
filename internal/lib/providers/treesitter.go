@@ -70,6 +70,16 @@ func TreeSitterArtifactPath(sourceID, version, language string) string {
 	return filepath.Join(TreeSitterArtifactVersionDir(sourceID, version), language+SharedLibExt())
 }
 
+// treeSitterGrammarDir returns the grammar directory for a build row.
+// Empty grammar_dir defaults to "." for parser builds (not queries_only).
+func treeSitterGrammarDir(b registry_parser.RegistryItemTreeSitterBuild) string {
+	d := strings.TrimSpace(b.GrammarDir)
+	if d == "" && !b.QueriesOnly {
+		return "."
+	}
+	return d
+}
+
 // buildTreeSitterParsersToCache builds tree-sitter parser shared libraries from
 // upstream source into NVPM's artifact cache and returns the list of languages
 // that were built.
@@ -106,10 +116,9 @@ func BuildTreeSitterParsersToCache(
 			built = append(built, lang)
 			continue
 		}
-		grammarDir := strings.TrimSpace(b.GrammarDir)
-		if grammarDir == "" {
-			continue
-		}
+		// nvim-treesitter omits location when the grammar is at repo root; registry imports
+		// often leave grammar_dir empty. Treat that as "." rather than skipping the build.
+		grammarDir := treeSitterGrammarDir(b)
 
 		outPath := TreeSitterArtifactPath(sourceID, version, lang)
 		if err := osMkdirAll(filepath.Dir(outPath), 0o755); err != nil {

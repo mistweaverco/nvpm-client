@@ -59,6 +59,8 @@ func TestAppendTreeSitterPlain(t *testing.T) {
 			{
 				Language:     "ruby",
 				GrammarDir:   ".",
+				QueriesDir:   "nvim-queries",
+				QueriesPath:  "queries/nvim",
 				Integrations: []string{"neovim"},
 				ExternalQueries: []packageExternalQueryDetails{
 					{RepoURL: "https://example.com/queries", Semver: true},
@@ -72,6 +74,46 @@ func TestAppendTreeSitterPlain(t *testing.T) {
 	}
 	if !strings.Contains(out, "External queries") {
 		t.Fatalf("missing external queries: %q", out)
+	}
+	if !strings.Contains(out, "Queries directory: nvim-queries") {
+		t.Fatalf("missing queries_dir: %q", out)
+	}
+	if !strings.Contains(out, "Queries path: queries/nvim") {
+		t.Fatalf("missing queries_path: %q", out)
+	}
+}
+
+func TestAppendTreeSitterMarkdown_QueriesDirPath(t *testing.T) {
+	var b strings.Builder
+	appendTreeSitterMarkdown(&b, &packageTreeSitterDetails{
+		Build: []packageTreeSitterBuildDetails{
+			{Language: "zsh", QueriesDir: "nvim-queries", QueriesPath: "flat-q"},
+		},
+	})
+	out := b.String()
+	if !strings.Contains(out, "**Queries directory:** `nvim-queries`") {
+		t.Fatalf("missing queries_dir: %q", out)
+	}
+	if !strings.Contains(out, "**Queries path:** `flat-q`") {
+		t.Fatalf("missing queries_path: %q", out)
+	}
+}
+
+func TestTreeSitterDetailsJSON_QueriesDirPath(t *testing.T) {
+	j := treeSitterDetailsJSON(&packageTreeSitterDetails{
+		Build: []packageTreeSitterBuildDetails{
+			{Language: "zsh", QueriesDir: "nvim-queries", QueriesPath: "flat-q"},
+		},
+	})
+	builds, _ := j["build"].([]map[string]interface{})
+	if len(builds) != 1 {
+		t.Fatalf("builds: %v", j["build"])
+	}
+	if builds[0]["queries_dir"] != "nvim-queries" {
+		t.Fatalf("queries_dir: %v", builds[0]["queries_dir"])
+	}
+	if builds[0]["queries_path"] != "flat-q" {
+		t.Fatalf("queries_path: %v", builds[0]["queries_path"])
 	}
 }
 

@@ -289,11 +289,7 @@ func collectExternalTreeSitterQueryNeeds(
 	seen := map[string]struct{}{}
 	for _, b := range build {
 		lang := strings.TrimSpace(b.Language)
-		grammarDir := strings.TrimSpace(b.GrammarDir)
 		if lang == "" {
-			continue
-		}
-		if !b.QueriesOnly && grammarDir == "" {
 			continue
 		}
 		if !TreeSitterBuildDeclaresNeovimIntegration(b) {

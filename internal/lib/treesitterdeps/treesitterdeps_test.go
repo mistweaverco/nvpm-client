@@ -121,6 +121,32 @@ func TestLanguageNeedsNeovimParser(t *testing.T) {
 	require.False(t, LanguageNeedsNeovimParser(reg, "ecma"))
 }
 
+func TestLanguageNeedsNeovimParser_EmptyGrammarDir(t *testing.T) {
+	zsh := registry_parser.RegistryItem{
+		Source:     registry_parser.RegistryItemSource{ID: "github:demo/zsh"},
+		Categories: []string{"Tree-sitter-parser"},
+		TreeSitter: &registry_parser.RegistryItemTreeSitter{
+			Build: []registry_parser.RegistryItemTreeSitterBuild{
+				{Language: "zsh", Integrations: []string{"neovim"}},
+			},
+		},
+	}
+	reg := stubReg{items: []registry_parser.RegistryItem{zsh}}
+	require.True(t, LanguageNeedsNeovimParser(reg, "zsh"))
+}
+
+func TestRootParserLanguages_EmptyGrammarDir(t *testing.T) {
+	root := registry_parser.RegistryItem{
+		TreeSitter: &registry_parser.RegistryItemTreeSitter{
+			Build: []registry_parser.RegistryItemTreeSitterBuild{
+				{Language: "zsh", Integrations: []string{"neovim"}},
+				{Language: "html_tags", QueriesOnly: true, Integrations: []string{"neovim"}},
+			},
+		},
+	}
+	require.Equal(t, []string{"zsh"}, RootParserLanguages(root))
+}
+
 func TestBuildInjectionParserRequireEdges(t *testing.T) {
 	root := registry_parser.RegistryItem{
 		TreeSitter: &registry_parser.RegistryItemTreeSitter{

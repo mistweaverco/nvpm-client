@@ -115,6 +115,22 @@ func TestCollectExternalTreeSitterQueryNeeds_QueriesOnlyWithoutGrammarDir(t *tes
 	require.Contains(t, got[0].URL, "html_tags")
 }
 
+func TestCollectExternalTreeSitterQueryNeeds_EmptyGrammarDirParserLanguage(t *testing.T) {
+	build := []registry_parser.RegistryItemTreeSitterBuild{
+		{
+			Language:     "zsh",
+			Integrations: []string{"neovim"},
+			ExternalQueries: registry_parser.TreeSitterExternalQueriesList{
+				{RepoURL: "https://github.com/example/nvim-treesitter-queries-zsh"},
+			},
+		},
+	}
+	got, err := collectExternalTreeSitterQueryNeeds(t.TempDir(), build, []string{"zsh"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "zsh", got[0].Lang)
+}
+
 func TestCollectExternalTreeSitterQueryNeeds_SkipsWhenBuildDoesNotTargetNeovim(t *testing.T) {
 	repo := t.TempDir()
 	gram := filepath.Join(repo, "g")

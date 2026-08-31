@@ -267,11 +267,11 @@ func (p *GitHubProvider) installFromGit(sourceID, repo, version string) bool {
 
 	isPlugin := IsEditorPluginPackage(sourceID)
 
-	// If this is a Tree-sitter parser package, build artifacts and run requested integrations.
+	// Registry Tree-sitter packages, or unknown git grammars when --integrate neovim is set.
 	var pins []local_packages_parser.TreeSitterExternalQueryPin
 	if !isPlugin {
 		var err error
-		pins, err = buildAndMaybeIntegrateTreeSitter(repoPath, registryItem, resolvedVersion, nil)
+		pins, err = integrateGitHostedTreeSitter(sourceID, resolvedVersion, repoPath, registryItem)
 		if err != nil {
 			logAndSetError(fmt.Sprintf("GitHub Install: Error building tree-sitter parsers: %v", err))
 			return false
@@ -315,14 +315,14 @@ func (p *GitHubProvider) Remove(sourceID string) bool {
 		return false
 	}
 
+	repoPath := p.getRepoPath(sourceID, repo)
+
 	// Remove Neovim tree-sitter parser(s) if this package installed them.
 	registry := githubRegistryParser()
-	registryItem := registry.GetBySourceId(sourceID)
+	registryItem := withInferredTreeSitter(registry.GetBySourceId(sourceID), repoPath, sourceID)
 	if err := removeNeovimTreeSitterParsers(registryItem); err != nil {
 		Logger.Info(fmt.Sprintf("GitHub Remove: Warning removing Neovim tree-sitter parsers: %v", err))
 	}
-
-	repoPath := p.getRepoPath(sourceID, repo)
 	Logger.Info(fmt.Sprintf("GitHub Remove: Removing package %s", repo))
 
 	// Remove symlinks (tool packages only)

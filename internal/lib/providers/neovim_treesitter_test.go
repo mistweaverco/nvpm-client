@@ -11,23 +11,128 @@ import (
 	"github.com/mistweaverco/nvpm-client/internal/lib/treesitterquery"
 )
 
+func writeQueryFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResolveNeovimTreeSitterQueriesDir_PrefersGrammarLocal(t *testing.T) {
 	repo := t.TempDir()
 	gram := filepath.Join(repo, "g")
-	if err := os.MkdirAll(filepath.Join(gram, "queries"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(gram, "queries", "highlights.scm"), []byte("(a)"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(repo, "queries"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "queries", "highlights.scm"), []byte("(b)"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got := resolveNeovimTreeSitterQueriesDir(repo, gram)
+	writeQueryFile(t, filepath.Join(gram, "queries"), "highlights.scm", "(a)")
+	writeQueryFile(t, filepath.Join(repo, "queries"), "highlights.scm", "(b)")
+	got := resolveNeovimTreeSitterQueriesDir(repo, gram, neovimQueryResolveOpts{Language: "demo"})
 	want := filepath.Join(gram, "queries")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestResolveNeovimTreeSitterQueriesDir_PrefersNvimQueriesLangOverQueries(t *testing.T) {
+	repo := t.TempDir()
+	writeQueryFile(t, filepath.Join(repo, "queries"), "highlights.scm", "(generic)")
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "zsh"), "highlights.scm", "(nvim)")
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "tests"), "highlights.scm", "(test)")
+	got := resolveNeovimTreeSitterQueriesDir(repo, repo, neovimQueryResolveOpts{Language: "zsh"})
+	want := filepath.Join(repo, "nvim-queries", "zsh")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestResolveNeovimTreeSitterQueriesDir_HonorsParserJSONQueriesDir(t *testing.T) {
+	repo := t.TempDir()
+	writeQueryFile(t, filepath.Join(repo, "queries"), "highlights.scm", "(generic)")
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "zsh"), "highlights.scm", "(nvim)")
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "tests"), "highlights.scm", "(test)")
+	meta := `{"lang":"zsh","queries_dir":"nvim-queries","test_dir":"nvim-queries/tests"}`
+	if err := os.WriteFile(filepath.Join(repo, "parser.json"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := resolveNeovimTreeSitterQueriesDir(repo, repo, neovimQueryResolveOpts{Language: "zsh"})
+	want := filepath.Join(repo, "nvim-queries", "zsh")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestResolveNeovimTreeSitterQueriesDir_HonorsRegistryQueriesDir(t *testing.T) {
+	repo := t.TempDir()
+	writeQueryFile(t, filepath.Join(repo, "queries"), "highlights.scm", "(generic)")
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "zsh"), "highlights.scm", "(nvim)")
+	writeQueryFile(t, filepath.Join(repo, "custom-q", "zsh"), "highlights.scm", "(registry)")
+	got := resolveNeovimTreeSitterQueriesDir(repo, repo, neovimQueryResolveOpts{
+		Language:   "zsh",
+		QueriesDir: "custom-q",
+	})
+	want := filepath.Join(repo, "custom-q", "zsh")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestResolveNeovimTreeSitterQueriesDir_HonorsRegistryQueriesPath(t *testing.T) {
+	repo := t.TempDir()
+	writeQueryFile(t, filepath.Join(repo, "queries"), "highlights.scm", "(generic)")
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "zsh"), "highlights.scm", "(nvim)")
+	writeQueryFile(t, filepath.Join(repo, "flat-q"), "highlights.scm", "(path)")
+	got := resolveNeovimTreeSitterQueriesDir(repo, repo, neovimQueryResolveOpts{
+		Language:    "zsh",
+		QueriesPath: "flat-q",
+	})
+	want := filepath.Join(repo, "flat-q")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestResolveNeovimTreeSitterQueriesDir_UnwrapsLanguageSubdir(t *testing.T) {
+	repo := t.TempDir()
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "zsh"), "highlights.scm", "(nvim)")
+	got := resolveNeovimTreeSitterQueriesDir(repo, repo, neovimQueryResolveOpts{
+		Language:   "zsh",
+		QueriesDir: "nvim-queries",
+	})
+	want := filepath.Join(repo, "nvim-queries", "zsh")
+	if got != want {
+		t.Fatalf("got %q want %q (must unwrap language subdir)", got, want)
+	}
+}
+
+func TestResolveNeovimTreeSitterQueriesDir_DoesNotTreatNvimQueriesTestsAsQueries(t *testing.T) {
+	repo := t.TempDir()
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "tests"), "highlights.scm", "(test)")
+	writeQueryFile(t, filepath.Join(repo, "queries"), "highlights.scm", "(generic)")
+	got := resolveNeovimTreeSitterQueriesDir(repo, repo, neovimQueryResolveOpts{Language: "zsh"})
+	want := filepath.Join(repo, "queries")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestResolveNeovimTreeSitterQueriesDir_ParserJSONIgnoresTestDir(t *testing.T) {
+	repo := t.TempDir()
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "tests"), "highlights.scm", "(test)")
+	meta := `{"lang":"zsh","queries_dir":"nvim-queries","test_dir":"nvim-queries/tests"}`
+	if err := os.WriteFile(filepath.Join(repo, "parser.json"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := resolveNeovimTreeSitterQueriesDir(repo, repo, neovimQueryResolveOpts{Language: "zsh"})
+	if got != "" {
+		t.Fatalf("expected no query source when only tests/ exist, got %q", got)
+	}
+}
+
+func TestResolveNeovimTreeSitterQueriesDir_EmptyGrammarDirUsesRepoRoot(t *testing.T) {
+	repo := t.TempDir()
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "zsh"), "highlights.scm", "(nvim)")
+	got := resolveNeovimTreeSitterQueriesDir(repo, repo, neovimQueryResolveOpts{Language: "zsh"})
+	want := filepath.Join(repo, "nvim-queries", "zsh")
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
@@ -139,6 +244,43 @@ func TestCacheNeovimTreeSitterQueriesForBuiltLangs_QueriesOnlyWithoutGrammarDir(
 	}
 	if string(b) != "(tag_name) @tag" {
 		t.Fatalf("unexpected cached query: %q", b)
+	}
+}
+
+func TestCacheNeovimTreeSitterQueriesForBuiltLangs_EmptyGrammarDirPrefersNvimQueries(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	prevIntegrations := append([]string{}, requestedIntegrations...)
+	SetRequestedIntegrations([]string{"neovim"})
+	t.Cleanup(func() { requestedIntegrations = prevIntegrations })
+
+	repo := t.TempDir()
+	writeQueryFile(t, filepath.Join(repo, "queries"), "highlights.scm", "(generic)")
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "zsh"), "highlights.scm", "(nvim)")
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "zsh"), "injections.scm", "(inj)")
+	writeQueryFile(t, filepath.Join(repo, "nvim-queries", "tests"), "highlights.scm", "(test)")
+	build := []registry_parser.RegistryItemTreeSitterBuild{
+		{Language: "zsh", Integrations: []string{"neovim"}},
+	}
+
+	_, err := cacheNeovimTreeSitterQueriesForBuiltLangs(repo, "github:demo/zsh", "v1", build, []string{"zsh"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cached := neovimTreeSitterQueriesCacheDir("github:demo/zsh", "v1", "zsh")
+	b, err := os.ReadFile(filepath.Join(cached, "highlights.scm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "(nvim)" {
+		t.Fatalf("expected nvim-queries content, got %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(cached, "zsh", "highlights.scm")); !os.IsNotExist(err) {
+		t.Fatalf("language subdirectory must be unwrapped, stat nested zsh/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cached, "tests")); !os.IsNotExist(err) {
+		t.Fatalf("tests/ must not be copied, stat: %v", err)
 	}
 }
 
@@ -259,6 +401,18 @@ func TestExternalQuerySourceDialect(t *testing.T) {
 	}
 	if got := externalQuerySourceDialect(registry_parser.RegistryItemTreeSitterExternalQueries{Dialect: "tree-sitter"}); got != treesitterquery.DialectTreeSitter {
 		t.Fatalf("tree-sitter: got %q", got)
+	}
+}
+
+func TestNeovimQuerySourceDialect(t *testing.T) {
+	if got := neovimQuerySourceDialect("/repo/nvim-queries/zsh", neovimQueryResolveOpts{Language: "zsh"}); got != treesitterquery.DialectNeovim {
+		t.Fatalf("nvim-queries path: got %q", got)
+	}
+	if got := neovimQuerySourceDialect("/repo/queries/zsh", neovimQueryResolveOpts{Language: "zsh"}); got != treesitterquery.DialectTreeSitter {
+		t.Fatalf("generic queries path: got %q", got)
+	}
+	if got := neovimQuerySourceDialect("/repo/custom-q/zsh", neovimQueryResolveOpts{Language: "zsh", QueriesDir: "custom-q"}); got != treesitterquery.DialectNeovim {
+		t.Fatalf("registry QueriesDir: got %q", got)
 	}
 }
 

@@ -28,6 +28,8 @@ type packageExternalQueryDetails struct {
 type packageTreeSitterBuildDetails struct {
 	Language        string
 	GrammarDir      string
+	QueriesDir      string
+	QueriesPath     string
 	QueriesOnly     bool
 	Integrations    []string
 	Inherits        []string
@@ -106,6 +108,8 @@ func collectTreeSitterDetails(item registry_parser.RegistryItem) *packageTreeSit
 		row := packageTreeSitterBuildDetails{
 			Language:    lang,
 			GrammarDir:  strings.TrimSpace(b.GrammarDir),
+			QueriesDir:  strings.TrimSpace(b.QueriesDir),
+			QueriesPath: strings.TrimSpace(b.QueriesPath),
 			QueriesOnly: b.QueriesOnly,
 			Inherits:    append([]string(nil), b.Inherits...),
 		}
@@ -262,6 +266,12 @@ func appendTreeSitterPlain(b *strings.Builder, ts *packageTreeSitterDetails) {
 		if row.GrammarDir != "" && !row.QueriesOnly {
 			b.WriteString(fmt.Sprintf("    Grammar directory: %s\n", row.GrammarDir))
 		}
+		if row.QueriesDir != "" {
+			b.WriteString(fmt.Sprintf("    Queries directory: %s\n", row.QueriesDir))
+		}
+		if row.QueriesPath != "" {
+			b.WriteString(fmt.Sprintf("    Queries path: %s\n", row.QueriesPath))
+		}
 		if len(row.Integrations) > 0 {
 			b.WriteString(fmt.Sprintf("    Integrations: %s\n", strings.Join(row.Integrations, ", ")))
 		}
@@ -296,6 +306,12 @@ func appendTreeSitterMarkdown(b *strings.Builder, ts *packageTreeSitterDetails) 
 		b.WriteString(fmt.Sprintf("### %s\n\n", title))
 		if row.GrammarDir != "" && !row.QueriesOnly {
 			b.WriteString(fmt.Sprintf("- **Grammar directory:** `%s`\n", row.GrammarDir))
+		}
+		if row.QueriesDir != "" {
+			b.WriteString(fmt.Sprintf("- **Queries directory:** `%s`\n", row.QueriesDir))
+		}
+		if row.QueriesPath != "" {
+			b.WriteString(fmt.Sprintf("- **Queries path:** `%s`\n", row.QueriesPath))
 		}
 		if len(row.Integrations) > 0 {
 			b.WriteString(fmt.Sprintf("- **Integrations:** %s\n", strings.Join(row.Integrations, ", ")))
@@ -336,6 +352,12 @@ func treeSitterDetailsJSON(ts *packageTreeSitterDetails) map[string]interface{} 
 		}
 		if row.GrammarDir != "" {
 			entry["grammar_dir"] = row.GrammarDir
+		}
+		if row.QueriesDir != "" {
+			entry["queries_dir"] = row.QueriesDir
+		}
+		if row.QueriesPath != "" {
+			entry["queries_path"] = row.QueriesPath
 		}
 		if row.QueriesOnly {
 			entry["queries_only"] = true

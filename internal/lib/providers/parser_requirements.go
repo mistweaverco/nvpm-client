@@ -52,9 +52,6 @@ func ensureTreeSitterParserRequirements(registryItem registry_parser.RegistryIte
 		if b.QueriesOnly {
 			continue
 		}
-		if strings.TrimSpace(b.GrammarDir) == "" {
-			continue
-		}
 		if lg := strings.ToLower(strings.TrimSpace(b.Language)); lg != "" {
 			rootProvides[lg] = struct{}{}
 		}

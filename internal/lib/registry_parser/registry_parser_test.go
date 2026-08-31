@@ -122,6 +122,14 @@ func TestRegistryItemTreeSitterBuild_QueriesOnlyJSON(t *testing.T) {
 	assert.True(t, build.QueriesOnly)
 }
 
+func TestRegistryItemTreeSitterBuild_QueriesDirPathJSON(t *testing.T) {
+	var build RegistryItemTreeSitterBuild
+	require.NoError(t, json.Unmarshal([]byte(`{"language":"zsh","queries_dir":"nvim-queries","queries_path":"flat-q"}`), &build))
+	assert.Equal(t, "zsh", build.Language)
+	assert.Equal(t, "nvim-queries", build.QueriesDir)
+	assert.Equal(t, "flat-q", build.QueriesPath)
+}
+
 func TestNewRegistryParser(t *testing.T) {
 	t.Run("creates new registry parser with file reader", func(t *testing.T) {
 		mockReader := &mockFileReader{}

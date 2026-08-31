@@ -50,7 +50,7 @@ type RegistryIndex interface {
 }
 
 // LanguageNeedsNeovimParser reports whether any registry parser package builds a native grammar
-// artifact (non queries_only with grammar_dir) for lang.
+// artifact (non queries_only) for lang. Empty grammar_dir is treated as repo root (".").
 func LanguageNeedsNeovimParser(reg RegistryIndex, lang string) bool {
 	want := normLang(lang)
 	if want == "" {
@@ -62,12 +62,18 @@ func LanguageNeedsNeovimParser(reg RegistryIndex, lang string) bool {
 			continue
 		}
 		for _, b := range item.TreeSitter.Build {
-			if normLang(b.Language) == want && !b.QueriesOnly && strings.TrimSpace(b.GrammarDir) != "" {
+			if normLang(b.Language) == want && isParserGrammarRow(b) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// isParserGrammarRow is true for a build row that produces a native parser (not queries_only).
+// Empty grammar_dir defaults to the repository root.
+func isParserGrammarRow(b registry_parser.RegistryItemTreeSitterBuild) bool {
+	return !b.QueriesOnly && strings.TrimSpace(b.Language) != ""
 }
 
 // ParserCandidates returns registry source ids for packages that provide a parser build row
@@ -181,16 +187,10 @@ func BuildParserRequireEdges(
 	seenPkg := map[string]struct{}{}
 	var visitPkg func(item registry_parser.RegistryItem) error
 	visitRow := func(item registry_parser.RegistryItem, b registry_parser.RegistryItemTreeSitterBuild) error {
-		if b.QueriesOnly {
-			return nil
-		}
-		if strings.TrimSpace(b.GrammarDir) == "" {
+		if !isParserGrammarRow(b) {
 			return nil
 		}
 		lang := normLang(b.Language)
-		if lang == "" {
-			return nil
-		}
 		for _, r := range b.Requires {
 			r = normLang(r)
 			if r == "" {
@@ -313,17 +313,15 @@ func sortedKeys(m map[string]struct{}) []string {
 	return out
 }
 
-// RootParserLanguages returns languages for non queries_only build rows that declare a grammar_dir.
+// RootParserLanguages returns languages for non queries_only build rows.
+// Empty grammar_dir is treated as repo root (".").
 func RootParserLanguages(root registry_parser.RegistryItem) []string {
 	if root.TreeSitter == nil {
 		return nil
 	}
 	var out []string
 	for _, b := range root.TreeSitter.Build {
-		if b.QueriesOnly {
-			continue
-		}
-		if strings.TrimSpace(b.GrammarDir) == "" {
+		if !isParserGrammarRow(b) {
 			continue
 		}
 		if s := normLang(b.Language); s != "" {

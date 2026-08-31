@@ -121,3 +121,44 @@ func TestBuildTreeSitterParsersToCache_QueriesOnlySkipsCLIAndBuild(t *testing.T)
 		t.Fatalf("unexpected languages: %#v", langs)
 	}
 }
+
+func TestBuildTreeSitterParsersToCache_EmptyGrammarDirDefaultsToRepoRoot(t *testing.T) {
+	oldHas := treeSitterHasCommand
+	oldShellCapture := treeSitterShellOutCapture
+	oldMkdir := osMkdirAll
+	oldStat := treeSitterStat
+	t.Cleanup(func() {
+		treeSitterHasCommand = oldHas
+		treeSitterShellOutCapture = oldShellCapture
+		osMkdirAll = oldMkdir
+		treeSitterStat = oldStat
+	})
+
+	treeSitterHasCommand = func(cmd string, args []string, env []string) bool { return true }
+	treeSitterStat = func(name string) (os.FileInfo, error) { return nil, nil }
+	osMkdirAll = func(path string, perm os.FileMode) error { return nil }
+
+	var gotArgs []string
+	var gotDir string
+	treeSitterShellOutCapture = func(command string, args []string, dir string, env []string) (int, string, error) {
+		if command != "tree-sitter" {
+			t.Fatalf("expected tree-sitter, got %q", command)
+		}
+		gotArgs = append([]string{}, args...)
+		gotDir = dir
+		return 0, "", nil
+	}
+
+	langs, err := BuildTreeSitterParsersToCache("/tmp/repo", "github:georgeharker/tree-sitter-zsh", "v0.63.5", []registry_parser.RegistryItemTreeSitterBuild{
+		{Language: "zsh", Integrations: []string{"neovim"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(langs) != 1 || langs[0] != "zsh" {
+		t.Fatalf("unexpected languages: %#v", langs)
+	}
+	if len(gotArgs) < 4 || gotArgs[0] != "build" || gotArgs[3] != "/tmp/repo" {
+		t.Fatalf("expected build at repo root, args=%#v dir=%q", gotArgs, gotDir)
+	}
+}

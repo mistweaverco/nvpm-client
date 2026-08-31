@@ -79,7 +79,7 @@ func ensureTreeSitterParserRequirements(registryItem registry_parser.RegistryIte
 		title := fmt.Sprintf("Installing parser dependency %s@%s (%s)...", sourceID, ver, lang)
 		var installFailed bool
 		action := func() {
-			if !Install(sourceID, ver) {
+			if !installTreeSitterDependencyPackage(sourceID, ver) {
 				installFailed = true
 			}
 		}

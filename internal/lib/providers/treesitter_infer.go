@@ -37,7 +37,11 @@ func integrateGitHostedTreeSitter(sourceID, version, repoPath string, registryIt
 			"Neovim integration requested, but this package is not a registry Tree-sitter parser and no grammar was found in the checkout (tree-sitter.json or src/parser.c)")
 		return nil, nil
 	}
-	return buildAndMaybeIntegrateTreeSitter(repoPath, item, version, nil)
+	var opts *buildTreeSitterOpts
+	if pre := nestedTreeSitterExternalQueryPreflight(); pre != nil {
+		opts = &buildTreeSitterOpts{ExternalQueryPreflight: pre}
+	}
+	return buildAndMaybeIntegrateTreeSitter(repoPath, item, version, opts)
 }
 
 // withInferredTreeSitter fills missing treesitter.build from the checkout when Neovim

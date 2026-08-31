@@ -424,7 +424,7 @@ nvpm up npm:eslint --no-always-trust
 
 `--filter` is available on `ls`, `show`, `add`, `up`, and `rm`. Repeat the flag for
 AND semantics. Each value is `[.]path:value` against the package's `show` JSON fields
-(`name`, `package_id`, `categories`, `provider`, `always_trust`, `git_refs`, `status`, …).
+(`name`, `package_id`, `categories`, `provider`, `always_trust`, `git_refs`, `status`, ...).
 
 - Leading `.` is optional
 - Paths are dot-separated; arrays match if **any** element matches the remainder

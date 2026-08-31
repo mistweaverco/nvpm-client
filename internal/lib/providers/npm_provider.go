@@ -31,7 +31,7 @@ var npmMkdirAll = os.MkdirAll
 var npmClose = func(f *os.File) error { return f.Close() }
 
 // npmQuietEnv suppresses npm's update notifier so its notices cannot pollute
-// captured output (e.g. `npm view … version`) or any remaining inherited I/O.
+// captured output (e.g. `npm view ... version`) or any remaining inherited I/O.
 func npmQuietEnv() []string {
 	return []string{
 		"NO_UPDATE_NOTIFIER=1",

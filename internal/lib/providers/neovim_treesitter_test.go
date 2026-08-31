@@ -604,3 +604,252 @@ func TestFormatNeovimQueryValidationError_IncludesCompatibilityNotes(t *testing.
 		t.Fatalf("expected #is-not? note, got %q", got)
 	}
 }
+
+func writeFakeExternalQueryClone(t *testing.T, destDir, lang, highlights string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(destDir, "queries"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := fmt.Sprintf("{\"lang\":%q,\"queries_dir\":\"queries\"}\n", lang)
+	if err := os.WriteFile(filepath.Join(destDir, "parser.json"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destDir, "queries", "highlights.scm"), []byte(highlights+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExternalQueryTargetLanguage_FromParserJSON(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeExternalQueryClone(t, dir, "markdown_inline", "(code_span)")
+	got := externalQueryTargetLanguage(dir, "markdown", []string{"markdown", "markdown_inline"})
+	if got != "markdown_inline" {
+		t.Fatalf("got %q want markdown_inline", got)
+	}
+}
+
+func TestExternalQueryTargetLanguage_QueriesLangSubdir(t *testing.T) {
+	dir := t.TempDir()
+	writeQueryFile(t, filepath.Join(dir, "queries", "markdown_inline"), "highlights.scm", "(code_span)")
+	got := externalQueryTargetLanguage(dir, "markdown", []string{"markdown", "markdown_inline"})
+	if got != "markdown_inline" {
+		t.Fatalf("got %q want markdown_inline", got)
+	}
+}
+
+func TestExternalQueryTargetLanguage_Fallback(t *testing.T) {
+	dir := t.TempDir()
+	writeQueryFile(t, filepath.Join(dir, "queries"), "highlights.scm", "(atx_heading)")
+	got := externalQueryTargetLanguage(dir, "markdown", []string{"markdown", "markdown_inline"})
+	if got != "markdown" {
+		t.Fatalf("got %q want markdown", got)
+	}
+}
+
+func TestCacheNeovimTreeSitterQueriesAfterBuild_RoutesSiblingExternalQueries(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	prevIntegrations := append([]string{}, requestedIntegrations...)
+	SetRequestedIntegrations([]string{"neovim"})
+	t.Cleanup(func() { requestedIntegrations = prevIntegrations })
+
+	prevClone := cloneExternalQueriesRepoForCache
+	cloneExternalQueriesRepoForCache = func(repoURL, destDir, _ string, _ bool, _, _ string) (string, error) {
+		switch {
+		case strings.Contains(repoURL, "markdown_inline"):
+			writeFakeExternalQueryClone(t, destDir, "markdown_inline", "(code_span) @markup.raw")
+		default:
+			writeFakeExternalQueryClone(t, destDir, "markdown", "(atx_heading) @markup.heading")
+		}
+		return "abc123def456", nil
+	}
+	t.Cleanup(func() { cloneExternalQueriesRepoForCache = prevClone })
+
+	sourceID := "github:demo/markdown"
+	version := "v1"
+	if err := os.MkdirAll(filepath.Dir(TreeSitterArtifactPath(sourceID, version, "markdown")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(TreeSitterArtifactPath(sourceID, version, "markdown"), []byte("fakeparser"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prevShellOut := neovimShellOutCapture
+	neovimShellOutCapture = func(_ string, _ []string, _ string, env []string) (int, string, error) {
+		lang, queryPath := "", ""
+		for _, e := range env {
+			if strings.HasPrefix(e, "NVPM_TS_LANG=") {
+				lang = strings.TrimPrefix(e, "NVPM_TS_LANG=")
+			}
+			if strings.HasPrefix(e, "NVPM_TS_QUERY_PATH=") {
+				queryPath = strings.TrimPrefix(e, "NVPM_TS_QUERY_PATH=")
+			}
+		}
+		if queryPath != "" {
+			b, err := os.ReadFile(queryPath)
+			if err != nil {
+				return 1, err.Error(), nil
+			}
+			if lang == "markdown" && strings.Contains(string(b), "code_span") {
+				return 1, `Query error at 2:2. Invalid node type "code_span"`, nil
+			}
+		}
+		return 0, "", nil
+	}
+	t.Cleanup(func() { neovimShellOutCapture = prevShellOut })
+
+	repo := t.TempDir()
+	gram := filepath.Join(repo, "tree-sitter-markdown")
+	writeQueryFile(t, filepath.Join(gram, "queries"), "highlights.scm", "(grammar_local)")
+	build := registry_parser.RegistryItemTreeSitterBuild{
+		Language:     "markdown",
+		GrammarDir:   "tree-sitter-markdown",
+		Integrations: []string{"neovim"},
+		ExternalQueries: registry_parser.TreeSitterExternalQueriesList{
+			{RepoURL: "https://github.com/neovim-treesitter/nvim-treesitter-queries-markdown"},
+			{RepoURL: "https://github.com/neovim-treesitter/nvim-treesitter-queries-markdown_inline"},
+		},
+	}
+	allBuild := []registry_parser.RegistryItemTreeSitterBuild{
+		build,
+		{Language: "markdown_inline", GrammarDir: "tree-sitter-markdown-inline", Integrations: []string{"neovim"}},
+	}
+
+	pins, err := cacheNeovimTreeSitterQueriesAfterBuild(repo, gram, sourceID, version, build, allBuild, func(string, string) bool { return true })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pins) != 2 {
+		t.Fatalf("got %d pins, want 2: %#v", len(pins), pins)
+	}
+	for _, p := range pins {
+		if p.Language != "markdown" {
+			t.Fatalf("lock pin language must stay the declaring build language, got %q", p.Language)
+		}
+	}
+
+	md, err := os.ReadFile(filepath.Join(neovimTreeSitterQueriesCacheDir(sourceID, version, "markdown"), "highlights.scm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(md), "(atx_heading)") {
+		t.Fatalf("markdown cache should keep markdown override queries, got %q", md)
+	}
+	if strings.Contains(string(md), "code_span") {
+		t.Fatalf("markdown cache must not be overwritten by markdown_inline queries, got %q", md)
+	}
+	inline, err := os.ReadFile(filepath.Join(neovimTreeSitterQueriesCacheDir(sourceID, version, "markdown_inline"), "highlights.scm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(inline), "code_span") {
+		t.Fatalf("markdown_inline queries should land under markdown_inline, got %q", inline)
+	}
+}
+
+func TestCacheNeovimTreeSitterQueriesAfterBuild_GrammarLocalWhenOnlySiblingExternal(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	prevIntegrations := append([]string{}, requestedIntegrations...)
+	SetRequestedIntegrations([]string{"neovim"})
+	t.Cleanup(func() { requestedIntegrations = prevIntegrations })
+
+	prevClone := cloneExternalQueriesRepoForCache
+	cloneExternalQueriesRepoForCache = func(repoURL, destDir, _ string, _ bool, _, _ string) (string, error) {
+		if !strings.Contains(repoURL, "markdown_inline") {
+			t.Fatalf("unexpected clone of %s", repoURL)
+		}
+		writeFakeExternalQueryClone(t, destDir, "markdown_inline", "(code_span) @markup.raw")
+		return "abc123def456", nil
+	}
+	t.Cleanup(func() { cloneExternalQueriesRepoForCache = prevClone })
+
+	sourceID := "github:demo/markdown"
+	version := "v1"
+	repo := t.TempDir()
+	gram := filepath.Join(repo, "tree-sitter-markdown")
+	writeQueryFile(t, filepath.Join(gram, "queries"), "highlights.scm", "(atx_heading) @markup.heading")
+	build := registry_parser.RegistryItemTreeSitterBuild{
+		Language:     "markdown",
+		GrammarDir:   "tree-sitter-markdown",
+		Integrations: []string{"neovim"},
+		ExternalQueries: registry_parser.TreeSitterExternalQueriesList{
+			{RepoURL: "https://github.com/neovim-treesitter/nvim-treesitter-queries-markdown_inline"},
+		},
+	}
+	allBuild := []registry_parser.RegistryItemTreeSitterBuild{
+		build,
+		{Language: "markdown_inline", Integrations: []string{"neovim"}},
+	}
+
+	pins, err := cacheNeovimTreeSitterQueriesAfterBuild(repo, gram, sourceID, version, build, allBuild, func(string, string) bool { return true })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(pins) != 1 || pins[0].Language != "markdown" {
+		t.Fatalf("want declaring-language pin, got %#v", pins)
+	}
+
+	md, err := os.ReadFile(filepath.Join(neovimTreeSitterQueriesCacheDir(sourceID, version, "markdown"), "highlights.scm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(md), "(atx_heading)") {
+		t.Fatalf("expected grammar-local markdown queries, got %q", md)
+	}
+	inline, err := os.ReadFile(filepath.Join(neovimTreeSitterQueriesCacheDir(sourceID, version, "markdown_inline"), "highlights.scm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(inline), "code_span") {
+		t.Fatalf("expected sibling queries under markdown_inline, got %q", inline)
+	}
+}
+
+func TestAllowMissingNeovimParserLanguages_IncludesExtraQueryLangs(t *testing.T) {
+	build := []registry_parser.RegistryItemTreeSitterBuild{
+		{Language: "objc", Integrations: []string{"neovim"}},
+		{Language: "html_tags", QueriesOnly: true, Integrations: []string{"neovim"}},
+	}
+	langs := []string{"objc", "html_tags", "c"}
+	got := allowMissingNeovimParserLanguages(build, langs)
+	if _, ok := got["html_tags"]; !ok {
+		t.Fatalf("queries_only html_tags must allow missing parser: %#v", got)
+	}
+	if _, ok := got["c"]; !ok {
+		t.Fatalf("extra cached query lang c must allow missing parser: %#v", got)
+	}
+	if _, ok := got["objc"]; ok {
+		t.Fatalf("objc builds a parser and must require it: %#v", got)
+	}
+}
+
+func TestNeovimTreeSitterInstallLanguages_UnionsCachedQueryLangs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	sourceID := "github:demo/objc"
+	version := "v1"
+	if err := os.MkdirAll(neovimTreeSitterQueriesCacheDir(sourceID, version, "c"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(neovimTreeSitterQueriesCacheDir(sourceID, version, "c"), "highlights.scm"), []byte("()"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := neovimTreeSitterInstallLanguages(sourceID, version, []string{"objc"})
+	wantC, wantObjc := false, false
+	for _, lang := range got {
+		switch lang {
+		case "c":
+			wantC = true
+		case "objc":
+			wantObjc = true
+		}
+	}
+	if !wantC || !wantObjc {
+		t.Fatalf("got %v, want objc and c", got)
+	}
+}

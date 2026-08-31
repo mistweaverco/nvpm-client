@@ -79,8 +79,9 @@ func SyncAllFromLock() error {
 			firstErr = fmt.Errorf("apply integrations for %s@%s: %w", sourceID, version, err)
 			continue
 		}
-		queryOnly := queryOnlyNeovimLanguagesForInstall(item.TreeSitter.Build, langs)
-		if err := installNeovimParsersAndQueriesFromCache(item.Source.ID, version, langs, queryOnly); err != nil && firstErr == nil {
+		installLangs := neovimTreeSitterInstallLanguages(item.Source.ID, version, langs)
+		allowMissing := allowMissingNeovimParserLanguages(item.TreeSitter.Build, installLangs)
+		if err := installNeovimParsersAndQueriesFromCache(item.Source.ID, version, installLangs, allowMissing); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("apply integrations for %s@%s: %w", sourceID, version, err)
 		}
 	}

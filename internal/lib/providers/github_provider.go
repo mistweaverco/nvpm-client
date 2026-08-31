@@ -157,7 +157,7 @@ func (p *GitHubProvider) installFromRelease(sourceID, repo, version string, regi
 
 	// Resolve version
 	resolvedVersion := version
-	// Placeholder branch names (main/master/…) are not GitHub Release tags.
+	// Placeholder branch names (main/master/...) are not GitHub Release tags.
 	// Named pre-releases such as "nightly" are real tags and must be kept:
 	// https://github.com/DanielGavin/ols/releases/tag/nightly
 	if IsGenericDefaultBranchAlias(resolvedVersion) {

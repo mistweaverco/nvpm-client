@@ -21,7 +21,7 @@ func Level() slog.Level {
 	return logLevel
 }
 
-// DebugEnabled reports whether verbose debug logging is on (NVPM_DEBUG=debug|true|1|…).
+// DebugEnabled reports whether verbose debug logging is on (NVPM_DEBUG=debug|true|1|...).
 func DebugEnabled() bool {
 	return logLevel <= slog.LevelDebug
 }

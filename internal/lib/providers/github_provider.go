@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
+	"github.com/mistweaverco/nvpm-client/internal/lib/githubauth"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/shell_out"
@@ -44,7 +45,7 @@ var lppGithubGetDataForProvider = local_packages_parser.GetDataForProvider
 var githubRegistryParser = registry_parser.NewDefaultRegistryParser
 
 // Injectable HTTP client for tests
-var githubHTTPGet = http.Get
+var githubHTTPGet = githubauth.HTTPGet
 
 func NewProviderGitHub() *GitHubProvider {
 	p := &GitHubProvider{}
@@ -571,7 +572,7 @@ func (p *GitHubProvider) getLatestReleaseTag(repo string) (string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+		return "", githubauth.APIStatusError(resp.StatusCode)
 	}
 
 	var release struct {

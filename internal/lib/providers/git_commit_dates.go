@@ -9,10 +9,15 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/mistweaverco/nvpm-client/internal/lib/githubauth"
 )
 
-// gitCommitDateHTTPGet is overridable in tests.
+// gitCommitDateHTTPGet is overridable in tests (GitLab/Codeberg).
 var gitCommitDateHTTPGet = http.Get
+
+// gitHubCommitDateHTTPGet is overridable in tests (GitHub API).
+var gitHubCommitDateHTTPGet = githubauth.HTTPGet
 
 // FetchGitCommitDate returns the upstream committer/author date for a commit SHA on a git host.
 // Tries the host HTTP API first, then falls back to a shallow `git fetch` of the commit
@@ -102,7 +107,7 @@ func fetchGitCommitDateViaGit(repoURL, sha string) (time.Time, error) {
 
 func fetchGitHubCommitDate(repo, sha string) (time.Time, error) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/commits/%s", repo, url.PathEscape(sha))
-	resp, err := gitCommitDateHTTPGet(apiURL)
+	resp, err := gitHubCommitDateHTTPGet(apiURL)
 	if err != nil {
 		return time.Time{}, err
 	}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mistweaverco/nvpm-client/internal/lib/githubauth"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/providers"
 	"github.com/mistweaverco/nvpm-client/internal/lib/semver"
@@ -610,19 +611,14 @@ func getCurrentVersion() string {
 
 // getLatestVersion fetches the latest release version from GitHub
 func getLatestVersion() (string, error) {
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	// Get the latest release
-	resp, err := client.Get("https://api.github.com/repos/mistweaverco/nvpm-client/releases/latest")
+	resp, err := githubauth.HTTPGet("https://api.github.com/repos/mistweaverco/nvpm-client/releases/latest")
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch latest release: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+		return "", githubauth.APIStatusError(resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)

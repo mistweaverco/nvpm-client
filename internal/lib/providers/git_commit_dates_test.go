@@ -36,14 +36,14 @@ func TestFetchGitCommitDateViaGit(t *testing.T) {
 }
 
 func TestFetchGitCommitDateAPIThenGitFallback(t *testing.T) {
-	oldHTTP := gitCommitDateHTTPGet
+	oldHTTP := gitHubCommitDateHTTPGet
 	oldShell := gitDiscoveryShellOutCapture
 	defer func() {
-		gitCommitDateHTTPGet = oldHTTP
+		gitHubCommitDateHTTPGet = oldHTTP
 		gitDiscoveryShellOutCapture = oldShell
 	}()
 
-	gitCommitDateHTTPGet = func(string) (*http.Response, error) {
+	gitHubCommitDateHTTPGet = func(string) (*http.Response, error) {
 		return nil, assert.AnError
 	}
 	gitDiscoveryShellOutCapture = func(command string, args []string, dir string, env []string) (int, string, error) {

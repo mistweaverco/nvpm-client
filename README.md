@@ -471,6 +471,12 @@ nvpm up -A yaml
 nvpm up --self
 ```
 
+Self-update (and other GitHub API calls) authenticate when possible so you are not limited to GitHub's unauthenticated rate limit. nvpm reads `GH_TOKEN`, then `GITHUB_TOKEN`, and otherwise uses `gh auth token` when the GitHub CLI is logged in. You can also pass a token explicitly:
+
+```sh
+GH_TOKEN=$(gh auth token) nvpm up --self
+```
+
 #### `nvpm rm`
 
 `rm`/`remove` removes packages.

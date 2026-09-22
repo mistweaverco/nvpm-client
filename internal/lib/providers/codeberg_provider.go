@@ -236,6 +236,7 @@ func (p *CodebergProvider) installFromGit(sourceID, repo, version string) bool {
 
 	isPlugin := IsEditorPluginPackage(sourceID)
 
+	skipCheckout := false
 	if _, err := codebergStat(repoPath); os.IsNotExist(err) {
 		Logger.Info(fmt.Sprintf("Codeberg Install: Cloning %s to %s", repoURL, repoPath))
 		code, err := codebergShellOut("git", []string{"clone", repoURL, repoPath}, packagesDir, nil)
@@ -244,42 +245,44 @@ func (p *CodebergProvider) installFromGit(sourceID, repo, version string) bool {
 			return false
 		}
 	} else {
-		// Update existing repository
-		Logger.Info(fmt.Sprintf("Codeberg Install: Updating repository at %s", repoPath))
-		if err := gitFetchOriginTags(codebergShellOutCapture, repoPath, sourceID, version, allowForcedTagSHAMismatch()); err != nil {
-			recordGitUpdateFailure("Codeberg Install", err)
+		headMatches, fetchErr := gitFetchIfNeededForExistingClone(codebergShellOutCapture, sourceID, repoPath, version, "Codeberg Install")
+		if fetchErr != nil {
+			recordGitUpdateFailure("Codeberg Install", fetchErr)
 			return false
 		}
+		skipCheckout = headMatches
 	}
 
 	// Resolve version label (tag/branch); lockfile commit overrides checkout target below.
 	resolvedVersion := version
-	lockedCheckout := strings.TrimSpace(GetLockedCommit()) != ""
-	if !lockedCheckout && (resolvedVersion == "" || resolvedVersion == "latest") {
-		if pin := resolveOmittedOrLatestFromRegistry(sourceID, resolvedVersion); pin != "" && pin != "latest" {
-			resolvedVersion = pin
-		} else {
-			var err error
-			resolvedVersion, err = ResolveGitLatestRef(sourceID)
-			if err != nil || strings.TrimSpace(resolvedVersion) == "" {
-				Logger.Info(fmt.Sprintf("Codeberg Install: Could not determine latest version, using default branch: %v", err))
-				resolvedVersion = p.getDefaultBranch(repo, repoPath)
+	lockedCheckout := strings.TrimSpace(GetLockedCommitFor(sourceID)) != ""
+	if !skipCheckout {
+		if !lockedCheckout && (resolvedVersion == "" || resolvedVersion == "latest") {
+			if pin := resolveOmittedOrLatestFromRegistry(sourceID, resolvedVersion); pin != "" && pin != "latest" {
+				resolvedVersion = pin
+			} else {
+				var err error
+				resolvedVersion, err = ResolveGitLatestRef(sourceID)
+				if err != nil || strings.TrimSpace(resolvedVersion) == "" {
+					Logger.Info(fmt.Sprintf("Codeberg Install: Could not determine latest version, using default branch: %v", err))
+					resolvedVersion = p.getDefaultBranch(repo, repoPath)
+				}
 			}
 		}
-	}
 
-	// Prefer lockfile commit over branch/tag so sync restores the pinned revision.
-	versionLabel := resolvedVersion
-	checkoutRef := PreferLockedGitCheckoutRef(resolvedVersion)
-	checkedOut, checkoutErr := gitCheckoutRefWithBranchFallback(codebergShellOut, repoPath, checkoutRef, p.getDefaultBranch(repo, repoPath))
-	if checkoutErr != nil {
-		Logger.Error(fmt.Sprintf("Codeberg Install: Error checking out version %s: %v", checkoutRef, checkoutErr))
-		return false
-	}
-	if lockedCheckout {
-		resolvedVersion = versionLabel
-	} else {
-		resolvedVersion = checkedOut
+		// Prefer lockfile commit over branch/tag so sync restores the pinned revision.
+		versionLabel := resolvedVersion
+		checkoutRef := PreferLockedGitCheckoutRef(sourceID, resolvedVersion)
+		checkedOut, checkoutErr := gitCheckoutRefWithBranchFallback(codebergShellOut, repoPath, checkoutRef, p.getDefaultBranch(repo, repoPath))
+		if checkoutErr != nil {
+			Logger.Error(fmt.Sprintf("Codeberg Install: Error checking out version %s: %v", checkoutRef, checkoutErr))
+			return false
+		}
+		if lockedCheckout {
+			resolvedVersion = versionLabel
+		} else {
+			resolvedVersion = checkedOut
+		}
 	}
 
 	// Add to local packages
@@ -517,16 +520,23 @@ func (p *CodebergProvider) Sync() bool {
 		if _, err := codebergStat(repoPath); os.IsNotExist(err) {
 			// Re-install missing packages at the lockfile commit when present.
 			Logger.Info(fmt.Sprintf("Codeberg Sync: Re-installing missing package %s", repo))
-			SetLockedCommit(pkg.Commit)
+			SetLockedCommit(pkg.SourceID, pkg.Commit)
 			ok := p.Install(pkg.SourceID, pkg.Version)
 			ResetLockedCommit()
 			if !ok {
 				allOk = false
 			}
+		} else if InstalledMatchesLock(pkg) {
+			Logger.Info(fmt.Sprintf("Codeberg Sync: %s already at locked commit, skipping", repo))
+			if !IsEditorPluginPackage(pkg.SourceID) {
+				if err := p.createSymlinks(repo, repoPath); err != nil {
+					Logger.Info(fmt.Sprintf("Codeberg Sync: Warning creating symlinks for %s: %v", repo, err))
+				}
+			}
 		} else if strings.TrimSpace(pkg.Commit) != "" && gitWorkTreeExists(repoPath) {
 			// Existing git clone: restore the pinned commit (branch versions must not float to tip).
 			Logger.Info(fmt.Sprintf("Codeberg Sync: Restoring locked commit for %s", repo))
-			SetLockedCommit(pkg.Commit)
+			SetLockedCommit(pkg.SourceID, pkg.Commit)
 			ok := p.Install(pkg.SourceID, pkg.Version)
 			ResetLockedCommit()
 			if !ok {

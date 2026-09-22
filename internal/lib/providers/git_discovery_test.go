@@ -6,6 +6,7 @@ import (
 
 	"github.com/mistweaverco/nvpm-client/internal/config"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+	"github.com/mistweaverco/nvpm-client/internal/lib/registry_parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -286,4 +287,54 @@ func TestDiscoverNonRegistryGitPackagesFiltersAndRecords(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, vers)
 	assert.Equal(t, "v9.9.9+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", vers[0].Version)
+}
+
+func TestGitCommitFromRegistryItem(t *testing.T) {
+	item := registry_parser.RegistryItem{
+		Version: "0.10.0",
+		Git: &registry_parser.RegistryItemGit{
+			Refs: []registry_parser.RegistryItemGitRef{
+				{Ref: "0.10.0", Kind: "tag", Commit: "6a5bba0ddea5d419a783e170c20988046376090d"},
+				{Ref: "master", Kind: "branch", Commit: "cfa2d58aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			},
+		},
+	}
+	assert.Equal(t, "cfa2d58aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", gitCommitFromRegistryItem(item, "master"))
+	assert.Equal(t, "6a5bba0ddea5d419a783e170c20988046376090d", gitCommitFromRegistryItem(item, "0.10.0"))
+	assert.Equal(t, "cfa2d58aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", gitCommitFromRegistryItem(item, "cfa2d58aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+	assert.Equal(t, "", gitCommitFromRegistryItem(item, "main"))
+}
+
+func TestDiscoveryVersionForEnforcementUsesRemoteLatestWithoutLsRemote(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	old := gitDiscoveryShellOutCapture
+	t.Cleanup(func() { gitDiscoveryShellOutCapture = old })
+	gitDiscoveryShellOutCapture = func(_ string, _ []string, _ string, _ []string) (int, string, error) {
+		t.Fatal("ls-remote should not run when remote_latest has the commit")
+		return 1, "", nil
+	}
+
+	commit := "fd9a48ebbe6ec30d5dfcc5b42c243941ccdca1aa"
+	require.NoError(t, SetRemoteLatest("github:saghen/blink.lib", RemoteLatestEntry{
+		Version: "main",
+		Commit:  commit,
+	}))
+
+	got, err := discoveryVersionForEnforcement("github:saghen/blink.lib", "main")
+	require.NoError(t, err)
+	assert.Equal(t, FormatGitDiscoveryVersionForRef("main", commit), got)
+}
+
+func TestDiscoveryVersionForEnforcementUsesKnownCommitWithoutLsRemote(t *testing.T) {
+	old := gitDiscoveryShellOutCapture
+	t.Cleanup(func() { gitDiscoveryShellOutCapture = old })
+	gitDiscoveryShellOutCapture = func(_ string, _ []string, _ string, _ []string) (int, string, error) {
+		t.Fatal("ls-remote should not run when the commit is already known")
+		return 1, "", nil
+	}
+
+	commit := "cfa2d58aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	got, err := discoveryVersionForEnforcementWithCommit("github:mfussenegger/nvim-dap", "master", commit)
+	require.NoError(t, err)
+	assert.Equal(t, FormatGitDiscoveryVersionForRef("master", commit), got)
 }

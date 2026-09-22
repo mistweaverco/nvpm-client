@@ -461,6 +461,24 @@ func formatEligibleVersion(version string, remaining time.Duration) string {
 	return version
 }
 
+// appendEligibleForList records a version as immediately eligible, or waiting on
+// min-release-age. always_trust packages skip the wait and are labeled as such.
+func appendEligibleForList(out *discoveryDisplay, sourceID, base string, age, minAge time.Duration) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return
+	}
+	if providers.PackageAlwaysTrust(sourceID) {
+		out.Eligible = append(out.Eligible, base+" always trusted")
+		return
+	}
+	if minAge <= 0 || age >= minAge {
+		out.Eligible = append(out.Eligible, base)
+		return
+	}
+	out.EligibleSoon = append(out.EligibleSoon, formatEligibleVersion(base, minAge-age))
+}
+
 func shortGitSHA(commit string) string {
 	commit = strings.TrimSpace(commit)
 	if len(commit) >= 7 {
@@ -664,12 +682,7 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 			}
 
 			age := now.Sub(foundFirstSeen)
-			eligibleLabel := formatEligibleGitRef(v, foundCommit, 0)
-			if minAge <= 0 || age >= minAge {
-				out.Eligible = append(out.Eligible, eligibleLabel)
-			} else {
-				out.EligibleSoon = append(out.EligibleSoon, formatEligibleGitRef(v, foundCommit, minAge-age))
-			}
+			appendEligibleForList(&out, sourceID, formatEligibleGitRef(v, foundCommit, 0), age, minAge)
 		}
 
 		if len(out.Available) == 0 {
@@ -714,11 +727,7 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 			displayVersion = displayVersion[:7]
 		}
 		age := now.Sub(firstSeen)
-		if minAge <= 0 || age >= minAge {
-			out.Eligible = append(out.Eligible, formatEligibleVersion(displayVersion, 0))
-		} else {
-			out.EligibleSoon = append(out.EligibleSoon, formatEligibleVersion(displayVersion, minAge-age))
-		}
+		appendEligibleForList(&out, sourceID, formatEligibleVersion(displayVersion, 0), age, minAge)
 		eligibleSeen[v] = struct{}{}
 	}
 
@@ -743,11 +752,7 @@ func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, 
 			continue
 		}
 		age := now.Sub(dv.FirstSeen)
-		if minAge <= 0 || age >= minAge {
-			out.Eligible = append(out.Eligible, formatEligibleVersion(displayVersion, 0))
-		} else {
-			out.EligibleSoon = append(out.EligibleSoon, formatEligibleVersion(displayVersion, minAge-age))
-		}
+		appendEligibleForList(&out, sourceID, formatEligibleVersion(displayVersion, 0), age, minAge)
 		eligibleSeen[dv.Version] = struct{}{}
 	}
 	return out
@@ -825,8 +830,8 @@ func (ls *ListService) discoveryDisplayForResolvedGitRef(sourceID, installedVers
 
 	if firstSeen.IsZero() {
 		// No discovery clock and nothing newer than installed.
-		if isUpdate && minAge <= 0 {
-			out.Eligible = append(out.Eligible, formatEligibleGitRef(ref, commit, 0))
+		if isUpdate && (minAge <= 0 || providers.PackageAlwaysTrust(sourceID)) {
+			appendEligibleForList(&out, sourceID, formatEligibleGitRef(ref, commit, 0), 0, minAge)
 		}
 		return out
 	}
@@ -853,12 +858,7 @@ func (ls *ListService) discoveryDisplayForResolvedGitRef(sourceID, installedVers
 	}
 
 	age := now.Sub(firstSeen)
-	eligibleLabel := formatEligibleGitRef(ref, commit, 0)
-	if minAge <= 0 || age >= minAge {
-		out.Eligible = append(out.Eligible, eligibleLabel)
-	} else {
-		out.EligibleSoon = append(out.EligibleSoon, formatEligibleGitRef(ref, commit, minAge-age))
-	}
+	appendEligibleForList(&out, sourceID, formatEligibleGitRef(ref, commit, 0), age, minAge)
 	return out
 }
 

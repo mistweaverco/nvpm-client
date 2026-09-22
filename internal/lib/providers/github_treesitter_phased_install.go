@@ -243,6 +243,7 @@ func (p *GitHubProvider) gitCloneAndCheckout(sourceID, repo, version string) (re
 		return "", "", false
 	}
 
+	skipCheckout := false
 	if _, err := githubStat(repoPath); os.IsNotExist(err) {
 		Logger.Info(fmt.Sprintf("GitHub Install: Cloning %s to %s", repoURL, repoPath))
 		code, err := githubShellOut("git", []string{"clone", repoURL, repoPath}, packagesDir, nil)
@@ -251,15 +252,19 @@ func (p *GitHubProvider) gitCloneAndCheckout(sourceID, repo, version string) (re
 			return "", "", false
 		}
 	} else {
-		Logger.Info(fmt.Sprintf("GitHub Install: Updating repository at %s", repoPath))
-		if err := gitFetchOriginTags(githubShellOutCapture, repoPath, sourceID, version, allowForcedTagSHAMismatch()); err != nil {
-			recordGitUpdateFailure("GitHub Install", err)
+		headMatches, fetchErr := gitFetchIfNeededForExistingClone(githubShellOutCapture, sourceID, repoPath, version, "GitHub Install")
+		if fetchErr != nil {
+			recordGitUpdateFailure("GitHub Install", fetchErr)
 			return "", "", false
 		}
+		skipCheckout = headMatches
 	}
 
 	resolvedVersion = version
-	lockedCheckout := strings.TrimSpace(GetLockedCommit()) != ""
+	lockedCheckout := strings.TrimSpace(GetLockedCommitFor(sourceID)) != ""
+	if skipCheckout {
+		return repoPath, resolvedVersion, true
+	}
 	if !lockedCheckout && (resolvedVersion == "" || resolvedVersion == "latest") {
 		if pin := resolveOmittedOrLatestFromRegistry(sourceID, resolvedVersion); pin != "" && pin != "latest" {
 			resolvedVersion = pin
@@ -275,7 +280,7 @@ func (p *GitHubProvider) gitCloneAndCheckout(sourceID, repo, version string) (re
 
 	// Prefer lockfile commit over branch/tag so sync restores the pinned revision.
 	versionLabel := resolvedVersion
-	checkoutRef := PreferLockedGitCheckoutRef(resolvedVersion)
+	checkoutRef := PreferLockedGitCheckoutRef(sourceID, resolvedVersion)
 	checkedOut, checkoutErr := gitCheckoutRefWithBranchFallback(githubShellOut, repoPath, checkoutRef, p.getDefaultBranch(repo, repoPath))
 	if checkoutErr != nil {
 		Logger.Error(fmt.Sprintf("GitHub Install: Error checking out version %s: %v", checkoutRef, checkoutErr))

@@ -138,10 +138,11 @@ Press Ctrl+C to interrupt gracefully after the current package finishes.`,
 			results := make([]pkgResult, 0, len(lock.Packages))
 			successCount := 0
 			failureCount := 0
+			skippedCount := 0
 
 			for _, pkg := range lock.Packages {
 				if err := ctx.Err(); err != nil {
-					printPackagesSyncInterrupted(successCount, failureCount)
+					printPackagesSyncInterrupted(successCount, skippedCount, failureCount)
 					osExit(exitCodeInterrupted)
 					return
 				}
@@ -156,6 +157,19 @@ Press Ctrl+C to interrupt gracefully after the current package finishes.`,
 				if pkg.Extras != nil {
 					ints = pkg.Extras.Integrations
 				}
+
+				if providers.InstalledMatchesLock(pkg) {
+					skippedCount++
+					fmt.Printf("%s Already synced %s@%s\n", IconCheck(), id, ver)
+					results = append(results, pkgResult{
+						id:           id,
+						version:      ver,
+						ok:           true,
+						integrations: ints,
+					})
+					continue
+				}
+
 				providers.SetRequestedIntegrations(ints)
 
 				registryItem := newRegistryParser().GetBySourceId(id)
@@ -166,13 +180,13 @@ Press Ctrl+C to interrupt gracefully after the current package finishes.`,
 				}
 
 				// Prefer lockfile commit for git-hosted packages so branch versions restore the pinned SHA.
-				providers.SetLockedCommit(pkg.Commit)
+				providers.SetLockedCommit(id, pkg.Commit)
 				ok, err := runNvpmInstallWithTreeSitterSpinnerPhases(title, id, ver, registryItem, func() bool {
 					return providers.Install(id, ver)
 				})
 				providers.ResetLockedCommit()
 				if spinnerutil.IsInterrupted(err) {
-					printPackagesSyncInterrupted(successCount, failureCount)
+					printPackagesSyncInterrupted(successCount, skippedCount, failureCount)
 					osExit(exitCodeInterrupted)
 					return
 				}
@@ -204,6 +218,9 @@ Press Ctrl+C to interrupt gracefully after the current package finishes.`,
 			// Final overview.
 			fmt.Printf("\nSync Summary:\n")
 			fmt.Printf("  Successfully synced: %d\n", successCount)
+			if skippedCount > 0 {
+				fmt.Printf("  Already up to date: %d\n", skippedCount)
+			}
 			if failureCount > 0 {
 				fmt.Printf("  Failed to sync: %d\n", failureCount)
 			}
@@ -261,11 +278,14 @@ func printSyncInterrupted(jsonOut bool, message string) {
 	fmt.Printf("\n%s %s\n", IconClose(), message)
 }
 
-func printPackagesSyncInterrupted(successCount, failureCount int) {
+func printPackagesSyncInterrupted(successCount, skippedCount, failureCount int) {
 	spinnerutil.ResetTerminal()
 	fmt.Printf("\n%s Sync interrupted\n", IconClose())
 	fmt.Printf("\nSync Summary (partial):\n")
 	fmt.Printf("  Successfully synced: %d\n", successCount)
+	if skippedCount > 0 {
+		fmt.Printf("  Already up to date: %d\n", skippedCount)
+	}
 	if failureCount > 0 {
 		fmt.Printf("  Failed to sync: %d\n", failureCount)
 	}

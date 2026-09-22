@@ -98,8 +98,11 @@ func TestGitCommitStillNeedsUpdateUsesLocalRemoteLatestOnly(t *testing.T) {
 	sourceID := "github:mistweaverco/floaterm.nvim"
 	installed := "301ea764263d0c1a42a8fc2985047c0012347401"
 	stale := "19198f485082474248b5919f6aa0e473a2dd9726"
-	require.NoError(t, RecordDiscovery(sourceID, FormatGitDiscoveryVersion("v1.1.0", stale)))
-	require.NoError(t, RecordDiscovery(sourceID, FormatGitDiscoveryVersion("v1.1.0", installed)))
+	past := time.Now().Add(-time.Hour)
+	_, err := getOrSetFirstSeen(sourceID, FormatGitDiscoveryVersion("v1.1.0", stale), past)
+	require.NoError(t, err)
+	_, err = getOrSetFirstSeen(sourceID, FormatGitDiscoveryVersion("v1.1.0", installed), past)
+	require.NoError(t, err)
 	require.NoError(t, SetRemoteLatest(sourceID, RemoteLatestEntry{
 		Version: "v1.1.0",
 		Commit:  installed,
@@ -109,6 +112,29 @@ func TestGitCommitStillNeedsUpdateUsesLocalRemoteLatestOnly(t *testing.T) {
 	assert.False(t, GitCommitStillNeedsUpdate(sourceID, "v1.1.0", installed, stale))
 	// Registry tip never recorded for this ref → still treat as an update.
 	assert.True(t, GitCommitStillNeedsUpdate(sourceID, "v1.1.0", installed, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+}
+
+func TestGitCommitStillNeedsUpdateListRecordDoesNotHideUpdate(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+
+	sourceID := "github:tree-sitter/tree-sitter-python"
+	installed := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	registryTip := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	require.NoError(t, SetRemoteLatest(sourceID, RemoteLatestEntry{
+		Version: "master",
+		Commit:  installed,
+	}))
+	assert.True(t, GitCommitStillNeedsUpdate(sourceID, "master", installed, registryTip))
+
+	// `nvpm ls` records the registry tip for min-release-age; a second ls must still
+	// report the package as outdated.
+	require.NoError(t, RecordDiscoveryBatch([]DiscoveryPair{{
+		SourceID: sourceID,
+		Version:  "master",
+		Commit:   registryTip,
+	}}))
+	assert.True(t, GitCommitStillNeedsUpdate(sourceID, "master", installed, registryTip))
 }
 
 func TestRefreshRemoteLatestAfterInstallReplacesStaleTag(t *testing.T) {

@@ -308,17 +308,37 @@ func GitCommitStillNeedsUpdate(sourceID, ref, installedCommit, remoteCommit stri
 		return true
 	}
 	// Install matches remote_latest. Only ignore the registry tip when it is an older
-	// tip we already recorded for this ref (stale metadata after accepting a move).
+	// tip we already recorded for this ref *before* remote_latest was set (stale
+	// metadata after accepting a move). List-time first_seen writes for min-release-age
+	// happen after install and must not suppress a real update on the next `nvpm ls`.
 	prevs, err := DiscoveredCommitsForRef(sourceID, ref)
 	if err != nil {
 		return true
 	}
 	for _, prev := range prevs {
 		if gitCommitsEqual(prev, remoteCommit) {
-			return false
+			if gitDiscoveryTipPredatesRemoteLatest(sourceID, ref, remoteCommit, entry) {
+				return false
+			}
+			return true
 		}
 	}
 	return true
+}
+
+// gitDiscoveryTipPredatesRemoteLatest reports whether the registry tip was first
+// recorded strictly before remote_latest was last checked. Same-second records
+// (typical of `nvpm ls` lazy first_seen) are treated as current observations.
+func gitDiscoveryTipPredatesRemoteLatest(sourceID, ref, remoteCommit string, entry RemoteLatestEntry) bool {
+	if entry.CheckedUnix <= 0 {
+		return true
+	}
+	key := FormatGitDiscoveryVersionForRef(ref, remoteCommit)
+	t, seen, err := GetFirstSeen(sourceID, key)
+	if err != nil || !seen {
+		return true
+	}
+	return t.Unix() < entry.CheckedUnix
 }
 
 // RefreshRemoteLatestAfterInstall updates remote_latest when we just installed the

@@ -1,6 +1,8 @@
 package providers
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,4 +73,43 @@ func TestGitCheckoutRefWithBranchFallback(t *testing.T) {
 	got, err := gitCheckoutRefWithBranchFallback(shell, "/repo", "main", "master")
 	require.NoError(t, err)
 	assert.Equal(t, "master", got)
+}
+
+func TestGitFetchIfNeededForExistingCloneSkipsWhenHEADMatches(t *testing.T) {
+	t.Cleanup(ResetLockedCommit)
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	stubGitRevParseHEAD(t, testLockSHA, nil)
+	SetLockedCommit("github:owner/repo", testLockSHA)
+
+	capture := func(string, []string, string, []string) (int, string, error) {
+		t.Fatal("fetch should not run when HEAD matches lock")
+		return 1, "", assert.AnError
+	}
+	headMatches, err := gitFetchIfNeededForExistingClone(capture, "github:owner/repo", dir, "main", "test")
+	require.NoError(t, err)
+	assert.True(t, headMatches)
+}
+
+func TestGitFetchIfNeededForExistingCloneSkipsFetchWhenObjectLocal(t *testing.T) {
+	t.Cleanup(ResetLockedCommit)
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	stubGitRevParseHEAD(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil)
+	SetLockedCommit("github:owner/repo", testLockSHA)
+
+	var calls [][]string
+	capture := func(_ string, args []string, _ string, _ []string) (int, string, error) {
+		calls = append(calls, append([]string{}, args...))
+		if len(args) >= 1 && args[0] == "cat-file" {
+			return 0, "", nil
+		}
+		t.Fatalf("unexpected git %v", args)
+		return 1, "", assert.AnError
+	}
+	headMatches, err := gitFetchIfNeededForExistingClone(capture, "github:owner/repo", dir, "main", "test")
+	require.NoError(t, err)
+	assert.False(t, headMatches)
+	require.Len(t, calls, 1)
+	assert.Equal(t, "cat-file", calls[0][0])
 }

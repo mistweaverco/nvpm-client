@@ -72,7 +72,11 @@ func ensureTreeSitterParserRequirements(registryItem registry_parser.RegistryIte
 		if err != nil {
 			return err
 		}
-		ver := strings.TrimSpace(reg.GetLatestVersion(sourceID))
+		if nestedDependencyAlreadyInstalled(sourceID) {
+			have = installedParserGrammarLanguages(reg)
+			continue
+		}
+		ver, _ := resolveNestedDependencyInstallSpec(sourceID)
 		if ver == "" {
 			ver = "latest"
 		}

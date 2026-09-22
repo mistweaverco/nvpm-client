@@ -296,7 +296,7 @@ func gitFetchOriginTags(capture gitShellOutCaptureFn, repoPath, sourceID, target
 // relative to discovery history, unless --force was passed. Sync (locked commit) skips this.
 // Returns false when the operation must abort (LastError already set).
 func enforceGitTagSHAOrReject(sourceID, version string) bool {
-	if strings.TrimSpace(GetLockedCommit()) != "" {
+	if strings.TrimSpace(GetLockedCommitFor(sourceID)) != "" {
 		return true
 	}
 	if !IsGitHostedSourceID(sourceID) {

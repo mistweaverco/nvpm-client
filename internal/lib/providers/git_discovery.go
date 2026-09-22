@@ -219,9 +219,66 @@ func gitTagForDiscoveryRef(ref string) string {
 	return ref
 }
 
+func gitCommitFromRegistryItem(item registry_parser.RegistryItem, version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" || item.Git == nil {
+		return ""
+	}
+	if r, ok := registryRefByName(item.Git.Refs, version); ok {
+		return strings.TrimSpace(r.Commit)
+	}
+	if isGitCommitSHA(version) {
+		for _, r := range item.Git.Refs {
+			if gitCommitsEqual(version, r.Commit) {
+				return strings.TrimSpace(r.Commit)
+			}
+		}
+	}
+	return ""
+}
+
+func gitCommitFromCachedSources(sourceID, version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return ""
+	}
+	item := registry_parser.NewDefaultRegistryParser().GetBySourceId(sourceID)
+	if c := gitCommitFromRegistryItem(item, version); c != "" {
+		return c
+	}
+	entry, ok, err := GetRemoteLatest(sourceID)
+	if err != nil || !ok {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(entry.Version), version) {
+		return strings.TrimSpace(entry.Commit)
+	}
+	if isGitCommitSHA(version) && gitCommitsEqual(version, entry.Commit) {
+		return strings.TrimSpace(entry.Commit)
+	}
+	return ""
+}
+
 func discoveryVersionForEnforcement(sourceID, version string) (string, error) {
+	return discoveryVersionForEnforcementWithCommit(sourceID, version, "")
+}
+
+func discoveryVersionForEnforcementWithCommit(sourceID, version, knownCommit string) (string, error) {
 	if !IsGitHostedSourceID(sourceID) {
 		return version, nil
+	}
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return "", fmt.Errorf("empty version")
+	}
+	if strings.Contains(version, "+") {
+		return version, nil
+	}
+	if commit := strings.TrimSpace(knownCommit); commit != "" {
+		return FormatGitDiscoveryVersion(gitTagForDiscoveryRef(version), commit), nil
+	}
+	if commit := gitCommitFromCachedSources(sourceID, version); commit != "" {
+		return FormatGitDiscoveryVersion(gitTagForDiscoveryRef(version), commit), nil
 	}
 	repoURL, err := gitRepoURLFromSourceID(sourceID)
 	if err != nil {
@@ -280,8 +337,10 @@ func persistGitHostedPackage(sourceID, tag, repoPath, repoURL string) error {
 	return nil
 }
 
+var gitRevParseHEADFn = defaultExternalQueriesGitRevParse
+
 func gitRevParseHEAD(dir string) (string, error) {
-	return defaultExternalQueriesGitRevParse(dir)
+	return gitRevParseHEADFn(dir)
 }
 
 // GitRemoteLatestResult is the outcome of DiscoverGitRemoteLatest.

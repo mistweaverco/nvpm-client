@@ -1,5 +1,11 @@
 package providers
 
+import (
+	"strings"
+
+	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
+)
+
 // treeSitterDependencyInstallSuccessCount counts successful Install() calls made from
 // tree-sitter inherit resolution (nested grammar installs), for CLI summaries.
 var treeSitterDependencyInstallSuccessCount int
@@ -57,8 +63,16 @@ func withNestedTreeSitterDependencyInstall(fn func()) {
 }
 
 func installTreeSitterDependencyPackage(sourceID, version string) bool {
+	if nestedDependencyAlreadyInstalled(sourceID) {
+		return true
+	}
 	var ok bool
 	withNestedTreeSitterDependencyInstall(func() {
+		commit := strings.TrimSpace(local_packages_parser.GetBySourceId(sourceID).Commit)
+		if commit != "" {
+			SetLockedCommit(sourceID, commit)
+			defer ClearLockedCommit(sourceID)
+		}
 		ok = Install(sourceID, version)
 	})
 	return ok

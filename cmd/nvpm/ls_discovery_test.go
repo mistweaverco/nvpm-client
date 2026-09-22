@@ -424,6 +424,42 @@ func TestDiscoveryDisplayNonGitRecordsFirstSeenAndShowsEligibleSoon(t *testing.T
 	assert.True(t, seen)
 }
 
+func TestDiscoveryDisplayAlwaysTrustIsImmediatelyEligible(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NVPM_HOME", home)
+	_ = files.GetAppDataPath()
+
+	providers.SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
+
+	cfg.Flags.MinReleaseAge = 7 * 24 * time.Hour
+	t.Cleanup(func() { cfg.Flags.MinReleaseAge = 0 })
+
+	require.NoError(t, local_packages_parser.AddLocalPackage("npm:eslint", "4.10.0"))
+	require.NoError(t, local_packages_parser.MergePackageAlwaysTrust("npm:eslint", true))
+
+	svc := NewListServiceWithDependencies(
+		&MockLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(string) (string, string) { return "4.11.0", "" },
+			GetDataFunc: func(bool) []registry_parser.RegistryItem {
+				return []registry_parser.RegistryItem{{
+					Source:  registry_parser.RegistryItemSource{ID: "npm:eslint"},
+					Version: "4.11.0",
+				}}
+			},
+		},
+		&MockUpdateChecker{},
+		&MockFileDownloader{},
+	)
+
+	disc := svc.discoveryDisplayForInstalled("npm:eslint", "4.10.0", "")
+	assert.Empty(t, disc.EligibleSoon)
+	require.Len(t, disc.Eligible, 1)
+	assert.Equal(t, "4.11.0 always trusted", disc.Eligible[0])
+	assert.Equal(t, disc.Eligible, mergedAvailableColumn(disc))
+}
+
 func TestDiscoveryDisplayRecordsFirstSeenAndShowsEligibleSoon(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("NVPM_HOME", home)
@@ -476,6 +512,47 @@ func TestDiscoveryDisplayRecordsFirstSeenAndShowsEligibleSoon(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.True(t, seen)
+}
+
+func TestDiscoveryDisplayGitAlwaysTrustIsImmediatelyEligible(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NVPM_HOME", home)
+	_ = files.GetAppDataPath()
+
+	providers.SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
+
+	cfg.Flags.MinReleaseAge = 7 * 24 * time.Hour
+	t.Cleanup(func() { cfg.Flags.MinReleaseAge = 0 })
+
+	sourceID := "github:o/manual"
+	commit := "322c79dfffffffffffffffffffffffffffffff"
+	require.NoError(t, local_packages_parser.AddLocalPackageWithCommit(sourceID, "main", "322c79cfffffffffffffffffffffffffffffff"))
+	require.NoError(t, local_packages_parser.MergePackageAlwaysTrust(sourceID, true))
+	require.NoError(t, providers.SetRemoteLatest(sourceID, providers.RemoteLatestEntry{
+		Version: "main",
+		Commit:  commit,
+	}))
+	require.NoError(t, providers.RecordDiscoveryBatch([]providers.DiscoveryPair{{
+		SourceID: sourceID,
+		Version:  "main",
+		Commit:   commit,
+	}}))
+
+	svc := NewListServiceWithDependencies(
+		&MockLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(string) (string, string) { return "", "" },
+		},
+		&MockUpdateChecker{},
+		&MockFileDownloader{},
+	)
+
+	disc := svc.discoveryDisplayForInstalled(sourceID, "main", "322c79cfffffffffffffffffffffffffffffff")
+	assert.Empty(t, disc.EligibleSoon)
+	require.Len(t, disc.Eligible, 1)
+	assert.Equal(t, "main (322c79d) always trusted", disc.Eligible[0])
+	assert.Equal(t, disc.Eligible, mergedAvailableColumn(disc))
 }
 
 func TestDiscoveryDisplayRegistryVersionIgnoredWhenRemoteLatestPreferBranch(t *testing.T) {
@@ -602,4 +679,51 @@ func TestCheckUpdateAvailabilityIgnoresStaleRemoteLatestTag(t *testing.T) {
 		&MockOutputWriter{},
 	)
 	assert.False(t, upSvc.checkUpdateAvailability(sourceID, "v0.25.0", installedCommit))
+}
+
+func TestCheckUpdateAvailabilityListDiscoveryDoesNotHideGitUpdate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NVPM_HOME", home)
+	_ = files.GetAppDataPath()
+	providers.SetDiscoveryWritesEnabled(true)
+	t.Cleanup(func() { providers.SetDiscoveryWritesEnabled(true) })
+
+	sourceID := "github:tree-sitter/tree-sitter-python"
+	installed := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	registryTip := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	require.NoError(t, providers.SetRemoteLatest(sourceID, providers.RemoteLatestEntry{
+		Version: "v1.1.0",
+		Commit:  installed,
+	}))
+
+	svc := NewListServiceWithDependencies(
+		&MockLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(string) (string, string) { return "v1.1.0", "" },
+			GetDataFunc: func(bool) []registry_parser.RegistryItem {
+				return []registry_parser.RegistryItem{{
+					Source:  registry_parser.RegistryItemSource{ID: sourceID},
+					Version: "v1.1.0",
+					Git: &registry_parser.RegistryItemGit{
+						Refs: []registry_parser.RegistryItemGitRef{{
+							Ref:            "v1.1.0",
+							Kind:           "tag",
+							Commit:         registryTip,
+							CommitDateUnix: time.Now().Unix(),
+						}},
+					},
+				}}
+			},
+		},
+		&MockUpdateChecker{},
+		&MockFileDownloader{},
+	)
+
+	_, hasUpdate := svc.checkUpdateAvailability(sourceID, "v1.1.0", installed)
+	assert.True(t, hasUpdate)
+
+	_ = svc.discoveryDisplayForResolvedGitRef(sourceID, "v1.1.0", installed, "v1.1.0", registryTip, "", 0)
+
+	_, hasUpdate = svc.checkUpdateAvailability(sourceID, "v1.1.0", installed)
+	assert.True(t, hasUpdate)
 }

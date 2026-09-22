@@ -1222,7 +1222,11 @@ func installRegistryTreeSitterPackagesInLanguageOrder(
 		if _, dup := seenInstall[id]; dup {
 			continue
 		}
-		ver := strings.TrimSpace(reg.GetLatestVersion(id))
+		if nestedDependencyAlreadyInstalled(id) {
+			seenInstall[id] = struct{}{}
+			continue
+		}
+		ver, _ := resolveNestedDependencyInstallSpec(id)
 		dispVer := ver
 		if dispVer == "" {
 			dispVer = "latest"

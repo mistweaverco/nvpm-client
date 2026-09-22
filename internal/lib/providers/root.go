@@ -48,6 +48,10 @@ func SetMinReleaseAgePolicy(p MinReleaseAgePolicy) {
 }
 
 func enforceMinReleaseAge(sourceID, version string) error {
+	return enforceMinReleaseAgeWithCommit(sourceID, version, "")
+}
+
+func enforceMinReleaseAgeWithCommit(sourceID, version, commit string) error {
 	p := minReleaseAgePolicy
 	if p.BypassAll || p.MinAge <= 0 {
 		return nil
@@ -59,7 +63,7 @@ func enforceMinReleaseAge(sourceID, version string) error {
 	trust := PackageAlwaysTrust(sourceID)
 	// Always resolve and record discovery - including for --force / always_trust - so
 	// tag SHA mismatch detection has history. Those flags only skip the age wait below.
-	discoveryVersion, err := discoveryVersionForEnforcement(sourceID, version)
+	discoveryVersion, err := discoveryVersionForEnforcementWithCommit(sourceID, version, commit)
 	if err != nil {
 		if p.Force || p.BypassAll || trust {
 			Logger.Info(fmt.Sprintf("min-release-age: warning: cannot resolve discovery version for %s@%s: %v", sourceID, version, err))
@@ -495,6 +499,41 @@ func alreadyInstalledAtVersion(sourceID, version string) bool {
 	return strings.EqualFold(strings.TrimSpace(installed.Version), version)
 }
 
+// minReleaseAgeUpdateTarget is the ref/version nvpm up actually installs, resolved
+// registry-first (git.refs, then remote_latest, then registry Version). Live git is
+// not used here - listing uses the same caches so Available wait matches skip.
+func minReleaseAgeUpdateTarget(sourceID string, registryItem registry_parser.RegistryItem) (version, commit string) {
+	if IsGitHostedSourceID(sourceID) {
+		if result, _, ok := ResolveGitLatestFromRegistry(registryItem, PreferBranchPolicyForSourceID(sourceID)); ok {
+			if v := strings.TrimSpace(result.Version); v != "" {
+				return v, strings.TrimSpace(result.Commit)
+			}
+		}
+		if entry, ok, err := GetRemoteLatest(sourceID); err == nil && ok {
+			if PreferRemoteLatestOverRegistry(entry, registryItem.Version, registryItem.PrereleaseVersion) {
+				if v := strings.TrimSpace(entry.Version); v != "" {
+					return v, strings.TrimSpace(entry.Commit)
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(registryItem.Version), ""
+}
+
+func alreadyAtMinReleaseAgeTarget(sourceID, version, commit string) bool {
+	if IsGitHostedSourceID(sourceID) {
+		installed := local_packages_parser.GetBySourceId(sourceID)
+		if strings.TrimSpace(commit) != "" {
+			return !HasGitCommitUpdate(installed.Commit, commit)
+		}
+		// Branch labels stay the same while the tip moves; they are not "already installed".
+		if IsPreferBranchRef(version) {
+			return false
+		}
+	}
+	return alreadyInstalledAtVersion(sourceID, version)
+}
+
 func Remove(sourceId string) bool {
 	provider := detectProvider(sourceId)
 	switch provider {
@@ -542,14 +581,15 @@ func Update(sourceId string) bool {
 	// provider Install() directly, so this must live in the wrapper).
 	registry := registry_parser.NewDefaultRegistryParser()
 	registryItem := registry.GetBySourceId(sourceId)
-	if registryItem.Version != "" {
+	target, targetCommit := minReleaseAgeUpdateTarget(sourceId, registryItem)
+	if target != "" {
 		// SHA check before age recording - same ordering requirement as Install.
-		if !enforceGitTagSHAOrReject(sourceId, registryItem.Version) {
+		if !enforceGitTagSHAOrReject(sourceId, target) {
 			return false
 		}
-		// min-release-age is for newly discovered versions, not the version already in the lock.
-		if !alreadyInstalledAtVersion(sourceId, registryItem.Version) {
-			if err := enforceMinReleaseAge(sourceId, registryItem.Version); err != nil {
+		// min-release-age is for newly discovered tips, not the commit already in the lock.
+		if !alreadyAtMinReleaseAgeTarget(sourceId, target, targetCommit) {
+			if err := enforceMinReleaseAgeWithCommit(sourceId, target, targetCommit); err != nil {
 				if tooSoon, ok := AsMinReleaseAgeTooSoon(err); ok {
 					// Safety wait: informational skip, not a hard error.
 					SetLastSkip(tooSoon.Error())

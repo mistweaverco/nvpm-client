@@ -21,6 +21,11 @@ func isTTY() bool {
 	return isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsTerminal(os.Stdout.Fd())
 }
 
+// IsTTY reports whether stdout or stderr is a terminal (spinner-capable).
+func IsTTY() bool {
+	return isTTY()
+}
+
 // ResetTerminal restores common terminal attributes after Bubble Tea spinners.
 // Sequential spinners or glamour rendering can otherwise leave a hidden cursor / raw mode.
 func ResetTerminal() {

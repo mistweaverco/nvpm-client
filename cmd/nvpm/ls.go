@@ -32,6 +32,14 @@ type ListService struct {
 	registry       RegistryProvider
 	updateChecker  UpdateChecker
 	fileDownloader FileDownloader
+
+	updateAvailCache map[string]updateAvailResult
+	discoveryCache   map[string]discoveryDisplay
+}
+
+type updateAvailResult struct {
+	info string
+	has  bool
 }
 
 // newListServiceFunc is a variable to allow test injection
@@ -295,6 +303,23 @@ func (ls *ListService) shouldShowListPrepSpinner() bool {
 	return (showRegistryProgress || showDiscoveryProgress) && !ShouldUseJSONOutput()
 }
 
+func (ls *ListService) resetListLookups() {
+	ls.updateAvailCache = make(map[string]updateAvailResult)
+	ls.discoveryCache = make(map[string]discoveryDisplay)
+}
+
+func listLookupKey(sourceID, version, commit string) string {
+	return sourceID + "\x00" + version + "\x00" + commit
+}
+
+func (ls *ListService) runListingWork(fn func()) {
+	if ls.shouldShowListPrepSpinner() && spinnerutil.IsTTY() {
+		_ = spinnerutil.Run("Listing packages...", fn)
+		return
+	}
+	fn()
+}
+
 func (ls *ListService) discoveryPairsForInstalled(localPackages []local_packages_parser.LocalPackageItem) []providers.DiscoveryPair {
 	if cfg.Flags.MinReleaseAge <= 0 || len(localPackages) == 0 {
 		return nil
@@ -522,6 +547,20 @@ func formatInstalledGitDisplay(sourceID, version, commit string, now time.Time) 
 }
 
 func (ls *ListService) discoveryDisplayForInstalled(sourceID, installedVersion, installedCommit string) discoveryDisplay {
+	if ls.discoveryCache != nil {
+		key := listLookupKey(sourceID, installedVersion, installedCommit)
+		if cached, ok := ls.discoveryCache[key]; ok {
+			return cached
+		}
+	}
+	out := ls.computeDiscoveryDisplayForInstalled(sourceID, installedVersion, installedCommit)
+	if ls.discoveryCache != nil {
+		ls.discoveryCache[listLookupKey(sourceID, installedVersion, installedCommit)] = out
+	}
+	return out
+}
+
+func (ls *ListService) computeDiscoveryDisplayForInstalled(sourceID, installedVersion, installedCommit string) discoveryDisplay {
 	stable, prerelease := ls.registry.GetLatestVersions(sourceID)
 	var remoteLatest providers.RemoteLatestEntry
 	var hasRemoteLatest bool
@@ -925,7 +964,6 @@ func (ls *ListService) recordRegistryDiscoveriesAfterRefresh(refreshed bool, loc
 func (ls *ListService) ListInstalledPackages(opts ListQueryOptions) {
 	var localPackages []local_packages_parser.LocalPackageItem
 	var refreshed bool
-	filters := opts.NameFilters
 
 	// Download uses its own top-level spinner (clears when finished) so it does not
 	// leave a permanent line and is not nested under a prep spinner.
@@ -951,7 +989,24 @@ func (ls *ListService) ListInstalledPackages(opts ListQueryOptions) {
 		}
 	}
 
-	// Filter packages if name filters are provided
+	ls.resetListLookups()
+	var out string
+	ls.runListingWork(func() {
+		filteredPackages := ls.filterInstalledPackages(localPackages, opts)
+		switch {
+		case ShouldUseJSONOutput():
+			out = ls.formatInstalledPackagesJSON(filteredPackages, opts)
+		case ShouldUsePlainOutput():
+			out = ls.formatInstalledPackagesPlain(filteredPackages, opts)
+		default:
+			out = renderMarkdownToString(ls.formatInstalledPackagesMarkdown(filteredPackages, opts))
+		}
+	})
+	fmt.Print(out)
+}
+
+func (ls *ListService) filterInstalledPackages(localPackages []local_packages_parser.LocalPackageItem, opts ListQueryOptions) []local_packages_parser.LocalPackageItem {
+	filters := opts.NameFilters
 	filteredPackages := localPackages
 	if len(filters) > 0 {
 		filteredPackages = []local_packages_parser.LocalPackageItem{}
@@ -993,16 +1048,7 @@ func (ls *ListService) ListInstalledPackages(opts ListQueryOptions) {
 		}
 	}
 
-	filteredPackages = ls.applyAdvancedFiltersToInstalled(filteredPackages, opts)
-
-	// Output based on mode
-	if ShouldUseJSONOutput() {
-		ls.listInstalledPackagesJSON(filteredPackages, opts)
-	} else if ShouldUsePlainOutput() {
-		ls.listInstalledPackagesPlain(filteredPackages, opts)
-	} else {
-		ls.listInstalledPackagesRich(filteredPackages, opts)
-	}
+	return ls.applyAdvancedFiltersToInstalled(filteredPackages, opts)
 }
 
 func (ls *ListService) applyAdvancedFiltersToInstalled(packages []local_packages_parser.LocalPackageItem, opts ListQueryOptions) []local_packages_parser.LocalPackageItem {
@@ -1074,8 +1120,8 @@ func (ls *ListService) registryCategoriesBySourceID() map[string][]string {
 	return m
 }
 
-// listInstalledPackagesRich lists installed packages with rich formatting using markdown tables
-func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packages_parser.LocalPackageItem, opts ListQueryOptions) {
+// formatInstalledPackagesMarkdown lists installed packages with rich formatting using markdown tables
+func (ls *ListService) formatInstalledPackagesMarkdown(filteredPackages []local_packages_parser.LocalPackageItem, opts ListQueryOptions) string {
 	var markdown strings.Builder
 	filters := opts.NameFilters
 
@@ -1093,8 +1139,7 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 			markdown.WriteString("No packages are currently installed.\n\n")
 			markdown.WriteString("Use `nvpm install <pkgId>` to install packages.\n")
 		}
-		ls.renderMarkdown(markdown.String())
-		return
+		return markdown.String()
 	}
 
 	markdown.WriteString(fmt.Sprintf("Found **%d** installed packages", len(filteredPackages)))
@@ -1176,34 +1221,35 @@ func (ls *ListService) listInstalledPackagesRich(filteredPackages []local_packag
 	}
 	markdown.WriteString("\n")
 
-	ls.renderMarkdown(markdown.String())
+	return markdown.String()
 }
 
-// listInstalledPackagesPlain lists installed packages in plain text format
-func (ls *ListService) listInstalledPackagesPlain(filteredPackages []local_packages_parser.LocalPackageItem, opts ListQueryOptions) {
+// formatInstalledPackagesPlain lists installed packages in plain text format
+func (ls *ListService) formatInstalledPackagesPlain(filteredPackages []local_packages_parser.LocalPackageItem, opts ListQueryOptions) string {
+	var b strings.Builder
 	filters := opts.NameFilters
-	fmt.Printf("%s Locally Installed Packages\n\n", IconSummary())
+	fmt.Fprintf(&b, "%s Locally Installed Packages\n\n", IconSummary())
 
 	if len(filteredPackages) == 0 {
 		if len(filters) > 0 || opts.hasAdvancedFilters() {
-			fmt.Print("No installed packages match the current criteria")
+			b.WriteString("No installed packages match the current criteria")
 			if len(filters) > 0 {
-				fmt.Printf(" (name filters: %s)", strings.Join(filters, ", "))
+				fmt.Fprintf(&b, " (name filters: %s)", strings.Join(filters, ", "))
 			}
-			fmt.Println(opts.constraintDescriptionPlain() + ".")
+			b.WriteString(opts.constraintDescriptionPlain() + ".\n")
 		} else {
-			fmt.Println("No packages are currently installed.")
-			fmt.Println("Use 'nvpm install <pkgId>' to install packages.")
+			b.WriteString("No packages are currently installed.\n")
+			b.WriteString("Use 'nvpm install <pkgId>' to install packages.\n")
 		}
-		return
+		return b.String()
 	}
 
-	fmt.Printf("Found %d installed packages", len(filteredPackages))
+	fmt.Fprintf(&b, "Found %d installed packages", len(filteredPackages))
 	if len(filters) > 0 {
-		fmt.Printf(" matching name filters: %s", strings.Join(filters, ", "))
+		fmt.Fprintf(&b, " matching name filters: %s", strings.Join(filters, ", "))
 	}
-	fmt.Print(opts.constraintDescriptionPlain())
-	fmt.Printf(":\n\n")
+	b.WriteString(opts.constraintDescriptionPlain())
+	b.WriteString(":\n\n")
 
 	// Group packages by provider
 	packagesByProvider := make(map[string][]local_packages_parser.LocalPackageItem)
@@ -1218,18 +1264,18 @@ func (ls *ListService) listInstalledPackagesPlain(filteredPackages []local_packa
 
 	for _, provider := range providerOrder {
 		if packages, exists := packagesByProvider[provider]; exists {
-			fmt.Printf("%s %s Packages:\n", IconDiamond(), strings.ToUpper(provider))
+			fmt.Fprintf(&b, "%s %s Packages:\n", IconDiamond(), strings.ToUpper(provider))
 			for _, pkg := range packages {
 				updateInfo, hasUpdate := ls.checkUpdateAvailability(pkg.SourceID, pkg.Version, pkg.Commit)
 				installedText := "v" + pkg.Version
 				if providers.IsGitHostedSourceID(pkg.SourceID) {
 					installedText = formatInstalledGitDisplay(pkg.SourceID, pkg.Version, pkg.Commit, time.Now())
 				}
-				fmt.Printf("   %s %s (%s) %s\n", getProviderIcon(provider), pkg.SourceID, installedText, updateInfo)
+				fmt.Fprintf(&b, "   %s %s (%s) %s\n", getProviderIcon(provider), pkg.SourceID, installedText, updateInfo)
 				disc := ls.discoveryDisplayForInstalled(pkg.SourceID, pkg.Version, pkg.Commit)
 				if cfg.Flags.MinReleaseAge > 0 {
 					if merged := mergedAvailableColumn(disc); len(merged) > 0 {
-						fmt.Printf("      available:  %s\n", strings.Join(merged, ", "))
+						fmt.Fprintf(&b, "      available:  %s\n", strings.Join(merged, ", "))
 					}
 				}
 				totalCount++
@@ -1237,21 +1283,22 @@ func (ls *ListService) listInstalledPackagesPlain(filteredPackages []local_packa
 					updateCount++
 				}
 			}
-			fmt.Println()
+			b.WriteString("\n")
 		}
 	}
 
 	// Show summary
-	fmt.Printf("%s Summary: %d of %d packages are up to date", IconSummary(), totalCount-updateCount, totalCount)
+	fmt.Fprintf(&b, "%s Summary: %d of %d packages are up to date", IconSummary(), totalCount-updateCount, totalCount)
 	if updateCount > 0 {
-		fmt.Printf(", %d updates available", updateCount)
-		fmt.Printf("\n%s Use 'nvpm update --all' to update all packages", IconLightbulb())
+		fmt.Fprintf(&b, ", %d updates available", updateCount)
+		fmt.Fprintf(&b, "\n%s Use 'nvpm update --all' to update all packages", IconLightbulb())
 	}
-	fmt.Println()
+	b.WriteString("\n")
+	return b.String()
 }
 
-// listInstalledPackagesJSON lists installed packages in JSON format
-func (ls *ListService) listInstalledPackagesJSON(filteredPackages []local_packages_parser.LocalPackageItem, opts ListQueryOptions) {
+// formatInstalledPackagesJSON lists installed packages in JSON format
+func (ls *ListService) formatInstalledPackagesJSON(filteredPackages []local_packages_parser.LocalPackageItem, opts ListQueryOptions) string {
 	filters := opts.NameFilters
 	result := make(map[string]any)
 	result["type"] = "installed"
@@ -1263,8 +1310,8 @@ func (ls *ListService) listInstalledPackagesJSON(filteredPackages []local_packag
 	if len(filteredPackages) == 0 {
 		result["count"] = 0
 		result["packages"] = []any{}
-		PrintJSON(result)
-		return
+		s, _ := FormatJSON(result)
+		return s
 	}
 
 	packagesData := make([]map[string]any, 0, len(filteredPackages))
@@ -1305,7 +1352,8 @@ func (ls *ListService) listInstalledPackagesJSON(filteredPackages []local_packag
 	result["count"] = len(filteredPackages)
 	result["packages"] = packagesData
 	result["updates_available"] = updateCount
-	PrintJSON(result)
+	s, _ := FormatJSON(result)
+	return s
 }
 
 // ListAllPackages lists all available packages from the registry.
@@ -1313,7 +1361,6 @@ func (ls *ListService) listInstalledPackagesJSON(filteredPackages []local_packag
 // Optional opts.OnlyOutdated, OnlyProviders, and OnlyCategories apply in addition (AND).
 func (ls *ListService) ListAllPackages(opts ListQueryOptions) {
 	var registry []registry_parser.RegistryItem
-	filters := opts.NameFilters
 
 	refreshed, _ := ls.fileDownloader.DownloadAndUnzipRegistry()
 	registry = ls.registry.GetData(refreshed)
@@ -1387,7 +1434,24 @@ func (ls *ListService) ListAllPackages(opts ListQueryOptions) {
 		}
 	}
 
-	// Filter packages if filters are provided
+	ls.resetListLookups()
+	var out string
+	ls.runListingWork(func() {
+		filteredRegistry := ls.filterRegistryPackages(registry, opts)
+		switch {
+		case ShouldUseJSONOutput():
+			out = ls.formatAllPackagesJSON(filteredRegistry, opts)
+		case ShouldUsePlainOutput():
+			out = ls.formatAllPackagesPlain(filteredRegistry, opts)
+		default:
+			out = renderMarkdownToString(ls.formatAllPackagesMarkdown(filteredRegistry, opts))
+		}
+	})
+	fmt.Print(out)
+}
+
+func (ls *ListService) filterRegistryPackages(registry []registry_parser.RegistryItem, opts ListQueryOptions) []registry_parser.RegistryItem {
+	filters := opts.NameFilters
 	filteredRegistry := registry
 	if len(filters) > 0 {
 		filteredRegistry = []registry_parser.RegistryItem{}
@@ -1425,16 +1489,7 @@ func (ls *ListService) ListAllPackages(opts ListQueryOptions) {
 		}
 	}
 
-	filteredRegistry = ls.applyAdvancedFiltersToRegistry(filteredRegistry, opts)
-
-	// Output based on mode
-	if ShouldUseJSONOutput() {
-		ls.listAllPackagesJSON(filteredRegistry, opts)
-	} else if ShouldUsePlainOutput() {
-		ls.listAllPackagesPlain(filteredRegistry, opts)
-	} else {
-		ls.listAllPackagesRich(filteredRegistry, opts)
-	}
+	return ls.applyAdvancedFiltersToRegistry(filteredRegistry, opts)
 }
 
 func (ls *ListService) applyAdvancedFiltersToRegistry(items []registry_parser.RegistryItem, opts ListQueryOptions) []registry_parser.RegistryItem {
@@ -1488,8 +1543,8 @@ func (ls *ListService) applyAdvancedFiltersToRegistry(items []registry_parser.Re
 	return out
 }
 
-// listAllPackagesRich lists all packages with rich formatting using markdown tables
-func (ls *ListService) listAllPackagesRich(filteredRegistry []registry_parser.RegistryItem, opts ListQueryOptions) {
+// formatAllPackagesMarkdown lists all packages with rich formatting using markdown tables
+func (ls *ListService) formatAllPackagesMarkdown(filteredRegistry []registry_parser.RegistryItem, opts ListQueryOptions) string {
 	var markdown strings.Builder
 	filters := opts.NameFilters
 
@@ -1506,8 +1561,7 @@ func (ls *ListService) listAllPackagesRich(filteredRegistry []registry_parser.Re
 		} else {
 			markdown.WriteString("No packages found in the registry.\n")
 		}
-		ls.renderMarkdown(markdown.String())
-		return
+		return markdown.String()
 	}
 
 	markdown.WriteString(fmt.Sprintf("Found **%d** packages in the registry", len(filteredRegistry)))
@@ -1576,13 +1630,11 @@ func (ls *ListService) listAllPackagesRich(filteredRegistry []registry_parser.Re
 		}
 	}
 
-	ls.renderMarkdown(markdown.String())
+	return markdown.String()
 }
 
-// renderMarkdown renders markdown content using glamour
-func (ls *ListService) renderMarkdown(markdown string) {
-	spinnerutil.ResetTerminal()
-
+// renderMarkdownToString renders markdown content using glamour without printing.
+func renderMarkdownToString(markdown string) string {
 	// Get terminal width, default to 80 if not available
 	width := 80
 	if w, _, err := term.GetSize(os.Stdout.Fd()); err == nil && w > 0 {
@@ -1595,49 +1647,45 @@ func (ls *ListService) renderMarkdown(markdown string) {
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
-		// Fallback to plain render
 		rendered, renderErr := glamour.Render(markdown, "dark")
 		if renderErr != nil {
-			fmt.Print(markdown)
-			return
+			return markdown
 		}
-		fmt.Print(rendered)
-		return
+		return rendered
 	}
 
 	rendered, err := r.Render(markdown)
 	if err != nil {
-		// Fallback to plain text if rendering fails
-		fmt.Print(markdown)
-		return
+		return markdown
 	}
-	fmt.Print(rendered)
+	return rendered
 }
 
-// listAllPackagesPlain lists all packages in plain text format
-func (ls *ListService) listAllPackagesPlain(filteredRegistry []registry_parser.RegistryItem, opts ListQueryOptions) {
+// formatAllPackagesPlain lists all packages in plain text format
+func (ls *ListService) formatAllPackagesPlain(filteredRegistry []registry_parser.RegistryItem, opts ListQueryOptions) string {
+	var b strings.Builder
 	filters := opts.NameFilters
-	fmt.Printf("%s All Available Packages\n\n", IconBook())
+	fmt.Fprintf(&b, "%s All Available Packages\n\n", IconBook())
 
 	if len(filteredRegistry) == 0 {
 		if len(filters) > 0 || opts.hasAdvancedFilters() {
-			fmt.Print("No packages match the current criteria")
+			b.WriteString("No packages match the current criteria")
 			if len(filters) > 0 {
-				fmt.Printf(" (name filters: %s)", strings.Join(filters, ", "))
+				fmt.Fprintf(&b, " (name filters: %s)", strings.Join(filters, ", "))
 			}
-			fmt.Println(opts.constraintDescriptionPlain() + ".")
+			b.WriteString(opts.constraintDescriptionPlain() + ".\n")
 		} else {
-			fmt.Println("No packages found in the registry.")
+			b.WriteString("No packages found in the registry.\n")
 		}
-		return
+		return b.String()
 	}
 
-	fmt.Printf("Found %d packages in the registry", len(filteredRegistry))
+	fmt.Fprintf(&b, "Found %d packages in the registry", len(filteredRegistry))
 	if len(filters) > 0 {
-		fmt.Printf(" matching name filters: %s", strings.Join(filters, ", "))
+		fmt.Fprintf(&b, " matching name filters: %s", strings.Join(filters, ", "))
 	}
-	fmt.Print(opts.constraintDescriptionPlain())
-	fmt.Printf(":\n\n")
+	b.WriteString(opts.constraintDescriptionPlain())
+	b.WriteString(":\n\n")
 
 	// Get installed packages to check status
 	installedPackages := ls.localPackages.GetData(false).Packages
@@ -1656,21 +1704,22 @@ func (ls *ListService) listAllPackagesPlain(filteredRegistry []registry_parser.R
 	providers := []string{"npm", "golang", "pypi", "cargo", "github", "gitlab", "codeberg", "gem", "composer", "luarocks", "nuget", "opam", "openvsx", "generic"}
 	for _, provider := range providers {
 		if packages, exists := packagesByProvider[provider]; exists {
-			fmt.Printf("%s %s Packages (%d):\n", IconDiamond(), strings.ToUpper(provider), len(packages))
+			fmt.Fprintf(&b, "%s %s Packages (%d):\n", IconDiamond(), strings.ToUpper(provider), len(packages))
 			for _, pkg := range packages {
-				fmt.Printf("   %s %s (v%s)", getProviderIcon(provider), pkg.Source.ID, pkg.Version)
+				fmt.Fprintf(&b, "   %s %s (v%s)", getProviderIcon(provider), pkg.Source.ID, pkg.Version)
 				if pkg.Description != "" {
-					fmt.Printf("\n      %s", pkg.Description)
+					fmt.Fprintf(&b, "\n      %s", pkg.Description)
 				}
-				fmt.Println()
+				b.WriteString("\n")
 			}
-			fmt.Println()
+			b.WriteString("\n")
 		}
 	}
+	return b.String()
 }
 
-// listAllPackagesJSON lists all packages in JSON format
-func (ls *ListService) listAllPackagesJSON(filteredRegistry []registry_parser.RegistryItem, opts ListQueryOptions) {
+// formatAllPackagesJSON lists all packages in JSON format
+func (ls *ListService) formatAllPackagesJSON(filteredRegistry []registry_parser.RegistryItem, opts ListQueryOptions) string {
 	filters := opts.NameFilters
 	result := make(map[string]any)
 	result["type"] = "all"
@@ -1682,8 +1731,8 @@ func (ls *ListService) listAllPackagesJSON(filteredRegistry []registry_parser.Re
 	if len(filteredRegistry) == 0 {
 		result["count"] = 0
 		result["packages"] = []any{}
-		PrintJSON(result)
-		return
+		s, _ := FormatJSON(result)
+		return s
 	}
 
 	// Get installed packages to check status
@@ -1722,14 +1771,29 @@ func (ls *ListService) listAllPackagesJSON(filteredRegistry []registry_parser.Re
 
 	result["count"] = len(filteredRegistry)
 	result["packages"] = packagesData
-	PrintJSON(result)
+	s, _ := FormatJSON(result)
+	return s
 }
 
 // checkUpdateAvailability checks if an update is available for a package.
 // installedCommit is optional; when set alongside a cached remote commit for
 // non-registry git packages, commit inequality decides outdated status.
 func (ls *ListService) checkUpdateAvailability(sourceID, currentVersion, installedCommit string) (string, bool) {
-	stable, prerelease, remoteCommit := resolveUpdateCandidates(ls.registry, sourceID)
+	key := listLookupKey(sourceID, currentVersion, installedCommit)
+	if ls.updateAvailCache != nil {
+		if cached, ok := ls.updateAvailCache[key]; ok {
+			return cached.info, cached.has
+		}
+	}
+	info, has := ls.computeUpdateAvailability(sourceID, currentVersion, installedCommit)
+	if ls.updateAvailCache != nil {
+		ls.updateAvailCache[key] = updateAvailResult{info: info, has: has}
+	}
+	return info, has
+}
+
+func (ls *ListService) computeUpdateAvailability(sourceID, currentVersion, installedCommit string) (string, bool) {
+	stable, prerelease, remoteCommit := resolveUpdateCandidatesOffline(ls.registry, sourceID)
 	if stable == "" && prerelease == "" {
 		return "", false // No registry or remote-latest info available
 	}
@@ -1753,17 +1817,30 @@ func (ls *ListService) checkUpdateAvailability(sourceID, currentVersion, install
 	return IconCheckCircle() + " Up to date", false
 }
 
+var latestReleaseTagForSourceFn = providers.LatestReleaseTagForSource
+
 // resolveUpdateCandidates returns registry stable/prerelease versions, falling back to
 // the cached remote_latest entry for packages not present in the registry. Git-hosted
 // registry packages may still use remote_latest when it is a prefer-branch ref.
+// liveReleases=true hits the host /releases/latest API for asset packages (used by nvpm up).
 func resolveUpdateCandidates(registry RegistryProvider, sourceID string) (stable, prerelease, remoteCommit string) {
+	return resolveUpdateCandidatesMode(registry, sourceID, true)
+}
+
+func resolveUpdateCandidatesOffline(registry RegistryProvider, sourceID string) (stable, prerelease, remoteCommit string) {
+	return resolveUpdateCandidatesMode(registry, sourceID, false)
+}
+
+func resolveUpdateCandidatesMode(registry RegistryProvider, sourceID string, liveReleases bool) (stable, prerelease, remoteCommit string) {
 	item := getRegistryItem(registry, sourceID)
 	// Release-asset packages must track GitHub/GitLab/Codeberg *releases*, not git tags.
 	// /releases/latest skips pre-releases (ols `nightly`); some git tags also have no assets.
 	if len(item.Source.Asset) > 0 {
-		if tag, err := providers.LatestReleaseTagForSource(sourceID); err == nil {
-			if v := strings.TrimSpace(tag); v != "" {
-				return v, "", ""
+		if liveReleases {
+			if tag, err := latestReleaseTagForSourceFn(sourceID); err == nil {
+				if v := strings.TrimSpace(tag); v != "" {
+					return v, "", ""
+				}
 			}
 		}
 		stable, prerelease = registry.GetLatestVersions(sourceID)

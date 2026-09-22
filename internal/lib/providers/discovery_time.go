@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
@@ -46,8 +47,65 @@ func discoveryDBPath() string {
 
 var discoveryWritesEnabled = true
 
+var (
+	discoveryCacheMu      sync.Mutex
+	discoveryCachePath    string
+	discoveryCache        *discoveryDB
+	discoveryCacheModTime time.Time
+	discoveryCacheSize    int64
+	discoveryCacheMissing bool
+)
+
 func SetDiscoveryWritesEnabled(enabled bool) {
 	discoveryWritesEnabled = enabled
+	if !enabled {
+		invalidateDiscoveryCache()
+	}
+}
+
+func invalidateDiscoveryCache() {
+	discoveryCacheMu.Lock()
+	defer discoveryCacheMu.Unlock()
+	clearDiscoveryCacheLocked()
+}
+
+func clearDiscoveryCacheLocked() {
+	discoveryCache = nil
+	discoveryCachePath = ""
+	discoveryCacheModTime = time.Time{}
+	discoveryCacheSize = 0
+	discoveryCacheMissing = false
+}
+
+func rememberDiscoveryCacheLocked(p string, db discoveryDB, modTime time.Time, size int64, missing bool) {
+	cached := cloneDiscoveryDB(db)
+	discoveryCache = &cached
+	discoveryCachePath = p
+	discoveryCacheModTime = modTime
+	discoveryCacheSize = size
+	discoveryCacheMissing = missing
+}
+
+func discoveryFileFingerprint(p string) (modTime time.Time, size int64, missing bool, err error) {
+	info, err := os.Stat(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return time.Time{}, 0, true, nil
+		}
+		return time.Time{}, 0, false, err
+	}
+	return info.ModTime(), info.Size(), false, nil
+}
+
+func cloneDiscoveryDB(db discoveryDB) discoveryDB {
+	out := emptyDiscoveryDB()
+	for k, v := range db.FirstSeenUnix {
+		out.FirstSeenUnix[k] = v
+	}
+	for k, v := range db.RemoteLatest {
+		out.RemoteLatest[k] = v
+	}
+	return out
 }
 
 func emptyDiscoveryDB() discoveryDB {
@@ -71,10 +129,30 @@ func readDiscoveryDB() (discoveryDB, error) {
 		return emptyDiscoveryDB(), nil
 	}
 	p := discoveryDBPath()
+	modTime, size, missing, err := discoveryFileFingerprint(p)
+	if err != nil {
+		return discoveryDB{}, err
+	}
+
+	discoveryCacheMu.Lock()
+	defer discoveryCacheMu.Unlock()
+	if discoveryCache != nil && discoveryCachePath == p &&
+		discoveryCacheMissing == missing &&
+		discoveryCacheModTime.Equal(modTime) &&
+		discoveryCacheSize == size {
+		return cloneDiscoveryDB(*discoveryCache), nil
+	}
+	if missing {
+		empty := emptyDiscoveryDB()
+		rememberDiscoveryCacheLocked(p, empty, time.Time{}, 0, true)
+		return empty, nil
+	}
 	b, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return emptyDiscoveryDB(), nil
+			empty := emptyDiscoveryDB()
+			rememberDiscoveryCacheLocked(p, empty, time.Time{}, 0, true)
+			return empty, nil
 		}
 		return discoveryDB{}, err
 	}
@@ -83,7 +161,8 @@ func readDiscoveryDB() (discoveryDB, error) {
 		return discoveryDB{}, err
 	}
 	normalizeDiscoveryDB(&db)
-	return db, nil
+	rememberDiscoveryCacheLocked(p, db, modTime, size, false)
+	return cloneDiscoveryDB(db), nil
 }
 
 func writeDiscoveryDB(db discoveryDB) error {
@@ -94,6 +173,7 @@ func writeDiscoveryDB(db discoveryDB) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
+	p := discoveryDBPath()
 	tmp := filepath.Join(dir, fmt.Sprintf(".discovery.%d.json", time.Now().UnixNano()))
 	b, err := json.MarshalIndent(db, "", "  ")
 	if err != nil {
@@ -102,7 +182,18 @@ func writeDiscoveryDB(db discoveryDB) error {
 	if err := os.WriteFile(tmp, b, 0644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, discoveryDBPath())
+	if err := os.Rename(tmp, p); err != nil {
+		return err
+	}
+	modTime, size, missing, err := discoveryFileFingerprint(p)
+	if err != nil {
+		invalidateDiscoveryCache()
+		return nil
+	}
+	discoveryCacheMu.Lock()
+	rememberDiscoveryCacheLocked(p, db, modTime, size, missing)
+	discoveryCacheMu.Unlock()
+	return nil
 }
 
 func discoveryKey(sourceID, version string) string {

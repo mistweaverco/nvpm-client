@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mistweaverco/nvpm-client/internal/config"
 	"github.com/mistweaverco/nvpm-client/internal/lib/files"
 	"github.com/mistweaverco/nvpm-client/internal/lib/local_packages_parser"
 	"github.com/mistweaverco/nvpm-client/internal/lib/providers"
@@ -726,4 +727,114 @@ func TestCheckUpdateAvailabilityListDiscoveryDoesNotHideGitUpdate(t *testing.T) 
 
 	_, hasUpdate = svc.checkUpdateAvailability(sourceID, "v1.1.0", installed)
 	assert.True(t, hasUpdate)
+}
+
+func TestResolveUpdateCandidatesOfflineSkipsReleaseAPI(t *testing.T) {
+	item := registry_parser.RegistryItem{
+		Version: "v1.0.0",
+		Source: registry_parser.RegistryItemSource{
+			ID:    "github:o/cli",
+			Asset: registry_parser.RegistryItemSourceAssetList{{Target: "linux"}},
+		},
+	}
+	reg := &MockRegistryProvider{
+		GetDataFunc: func(bool) []registry_parser.RegistryItem { return []registry_parser.RegistryItem{item} },
+		GetLatestVersionsFunc: func(string) (string, string) {
+			return "v1.0.0", ""
+		},
+	}
+
+	old := latestReleaseTagForSourceFn
+	t.Cleanup(func() { latestReleaseTagForSourceFn = old })
+	latestReleaseTagForSourceFn = func(string) (string, error) {
+		t.Fatal("list must not call the live releases API")
+		return "", nil
+	}
+
+	stable, prerelease, commit := resolveUpdateCandidatesOffline(reg, "github:o/cli")
+	assert.Equal(t, "v1.0.0", stable)
+	assert.Equal(t, "", prerelease)
+	assert.Equal(t, "", commit)
+}
+
+func TestResolveUpdateCandidatesLiveUsesReleaseAPI(t *testing.T) {
+	item := registry_parser.RegistryItem{
+		Version: "v1.0.0",
+		Source: registry_parser.RegistryItemSource{
+			ID:    "github:o/cli",
+			Asset: registry_parser.RegistryItemSourceAssetList{{Target: "linux"}},
+		},
+	}
+	reg := &MockRegistryProvider{
+		GetDataFunc: func(bool) []registry_parser.RegistryItem { return []registry_parser.RegistryItem{item} },
+		GetLatestVersionsFunc: func(string) (string, string) {
+			return "v1.0.0", ""
+		},
+	}
+
+	old := latestReleaseTagForSourceFn
+	t.Cleanup(func() { latestReleaseTagForSourceFn = old })
+	called := false
+	latestReleaseTagForSourceFn = func(sourceID string) (string, error) {
+		called = true
+		assert.Equal(t, "github:o/cli", sourceID)
+		return "v9.9.9", nil
+	}
+
+	stable, _, _ := resolveUpdateCandidates(reg, "github:o/cli")
+	assert.True(t, called)
+	assert.Equal(t, "v9.9.9", stable)
+}
+
+func TestShouldShowListPrepSpinnerJSON(t *testing.T) {
+	oldProgress := showDiscoveryProgress
+	oldRegistry := showRegistryProgress
+	oldFunc := getColorConfigFunc
+	t.Cleanup(func() {
+		showDiscoveryProgress = oldProgress
+		showRegistryProgress = oldRegistry
+		getColorConfigFunc = oldFunc
+	})
+
+	showDiscoveryProgress = true
+	showRegistryProgress = true
+	SetColorConfigFunc(func() config.ConfigFlags {
+		return config.ConfigFlags{Output: config.OutputModeJSON}
+	})
+	ls := NewListServiceWithDependencies(&MockLocalPackagesProvider{}, &MockRegistryProvider{}, &MockUpdateChecker{}, &MockFileDownloader{})
+	assert.False(t, ls.shouldShowListPrepSpinner())
+
+	SetColorConfigFunc(func() config.ConfigFlags {
+		return config.ConfigFlags{Output: config.OutputModeRich}
+	})
+	assert.True(t, ls.shouldShowListPrepSpinner())
+}
+
+func TestListLookupsMemoizeUpdateAvailability(t *testing.T) {
+	calls := 0
+	svc := NewListServiceWithDependencies(
+		&MockLocalPackagesProvider{},
+		&MockRegistryProvider{
+			GetLatestVersionsFunc: func(string) (string, string) { return "9.0.0", "" },
+			GetDataFunc: func(bool) []registry_parser.RegistryItem {
+				return []registry_parser.RegistryItem{{
+					Source:  registry_parser.RegistryItemSource{ID: "npm:eslint"},
+					Version: "9.0.0",
+				}}
+			},
+		},
+		&MockUpdateChecker{
+			CheckIfUpdateIsAvailableFunc: func(currentVersion, latestVersion string) (bool, string) {
+				calls++
+				return true, ""
+			},
+		},
+		&MockFileDownloader{},
+	)
+	svc.resetListLookups()
+	_, has := svc.checkUpdateAvailability("npm:eslint", "8.0.0", "")
+	assert.True(t, has)
+	_, has = svc.checkUpdateAvailability("npm:eslint", "8.0.0", "")
+	assert.True(t, has)
+	assert.Equal(t, 1, calls)
 }

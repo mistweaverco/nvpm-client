@@ -172,3 +172,43 @@ func TestRefreshRemoteLatestAfterInstallKeepsPreferBranchCache(t *testing.T) {
 	assert.Equal(t, "main", entry.Version)
 	assert.Equal(t, "cccccccccccccccccccccccccccccccccccccccc", entry.Commit)
 }
+
+func TestDiscoveryDBCacheHitsSamePath(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+
+	require.NoError(t, RecordDiscovery("npm:eslint", "9.0.0"))
+	first, ok, err := GetFirstSeen("npm:eslint", "9.0.0")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	again, ok, err := GetFirstSeen("npm:eslint", "9.0.0")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, first, again)
+}
+
+func TestDiscoveryDBWriteIsVisibleOnRead(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+
+	require.NoError(t, RecordDiscovery("npm:eslint", "9.0.0"))
+	require.NoError(t, RecordDiscovery("npm:eslint", "9.1.0"))
+	_, ok, err := GetFirstSeen("npm:eslint", "9.1.0")
+	require.NoError(t, err)
+	assert.True(t, ok)
+}
+
+func TestDiscoveryDBCacheDoesNotLeakAcrossNvpmHome(t *testing.T) {
+	_ = withTempNvpmHome(t)
+	SetDiscoveryWritesEnabled(true)
+	require.NoError(t, RecordDiscovery("npm:eslint", "9.0.0"))
+	_, ok, err := GetFirstSeen("npm:eslint", "9.0.0")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	_ = withTempNvpmHome(t)
+	_, ok, err = GetFirstSeen("npm:eslint", "9.0.0")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}

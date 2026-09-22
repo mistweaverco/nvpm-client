@@ -1,6 +1,7 @@
 package nvpm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,11 +29,25 @@ func ShouldUseJSONOutput() bool {
 	return GetOutputMode() == config.OutputModeJSON
 }
 
+// FormatJSON encodes data as indented JSON (trailing newline, same as PrintJSON).
+func FormatJSON(data interface{}) (string, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(data); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
 // PrintJSON outputs data as JSON
 func PrintJSON(data interface{}) error {
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(data)
+	s, err := FormatJSON(data)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(os.Stdout, s)
+	return err
 }
 
 func printProviderRequirementError(packageID string, err error) {
